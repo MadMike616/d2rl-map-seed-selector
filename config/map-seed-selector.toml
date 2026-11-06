@@ -1,0 +1,19 @@
+# Map Seed Selector
+# Add [[seeds]] blocks below for the offline map seeds you want to choose.
+
+config_version = 1
+selected_seed = "character" # Stored compatibility value for the visible "Off" option.
+
+[ui]
+# Screen coordinates of the Add Seed button's upper-left corner, in UI pixels.
+# The selector and "Map Seed" text move with this anchor, 56 pixels to its right.
+# The screen's upper-left corner is (0, 0); X increases to the right, Y down.
+position_x = 800
+position_y = 0
+# Place the "Map Seed" label above, below, left, or right of the selector.
+text_position = "right"
+# Choose "above" or "below".
+expand_direction = "below"
+
+# Seed values are unsigned 32-bit integers in decimal or hexadecimal.
+# Names are optional. Blank or non-ASCII names display the seed instead.

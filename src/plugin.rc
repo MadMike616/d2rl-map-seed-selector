@@ -1,0 +1,27 @@
+#include <D2RLPlugin/resource.h>
+#include <D2RLPlugin/version.h>
+
+D2RL_PLUGIN_MANIFEST_RESOURCE_ID RCDATA { D2RL_PLUGIN_RESOURCE_DWORD(D2RL_PLUGIN_ABI_VERSION) }
+
+1 VERSIONINFO
+FILEVERSION 0,1,34,0
+PRODUCTVERSION 0,1,34,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "MadMike"
+      VALUE "FileDescription", "Selects configured offline map seeds."
+      VALUE "FileVersion", "0.1.36"
+      VALUE "InternalName", "map-seed-selector"
+      VALUE "OriginalFilename", "d2rl-map-seed-selector.dll"
+      VALUE "ProductName", "Map Seed Selector"
+      VALUE "ProductVersion", "0.1.36"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 1200
+  END
+END
