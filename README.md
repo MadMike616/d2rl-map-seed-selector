@@ -63,4 +63,3 @@ The DLL is written to `build/Release/d2rl-map-seed-selector.dll`. The build pins
 ## Install and verify
 
 Copy the DLL to D2RLoader's global `d2rloader/plugins/` folder or the active mod's plugin folder. The config is created on first load. Seeds added through the in-game prompt should appear in the dropdown immediately. Check that the selector persists its selection and changes the generated map after starting a new game. Also check that it stays unavailable in online character selection and closes when leaving Offline selection.
-
