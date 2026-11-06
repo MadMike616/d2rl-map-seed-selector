@@ -18,7 +18,7 @@ Keep **Generate new map layouts** turned off for the intended static map-seed be
 
 ## Configuration
 
-The configuration is `d2rloader/config/map-seed-selector.toml`. The shipped template contains the settings below and no seed entries; add one `[[seeds]]` block per saved map. Keep the seed blocks at the end of the file.
+The configuration is `d2rloader/config/map-seed-selector.toml`. The shipped template has no seed entries. The example below adds two; keep all `[[seeds]]` blocks at the end of the file.
 
 ```toml
 config_version = 1
