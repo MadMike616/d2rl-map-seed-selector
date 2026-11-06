@@ -1,7 +1,5 @@
 # Map Seed Selector
 
-**D2RLoader plugin by MadMike · v0.1.36**
-
 Choose a saved map seed from Offline character selection. Add seeds in-game, select them before starting a game, and keep the choice in the plugin configuration. Hover a row to see its decimal seed.
 
 ## Features
