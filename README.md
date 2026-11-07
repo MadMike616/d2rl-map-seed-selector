@@ -1,14 +1,17 @@
 # Map Seed Selector
 
-Choose a saved map seed from Offline character selection. Add seeds in-game, select them before starting a game, and keep the choice in the plugin configuration. Hover a row to see its decimal seed.
+**D2RLoader plugin by MadMike · v0.1.52**
+
+Choose a saved map seed from Offline character selection, or add one from the Add Seed prompt. The selected seed is applied when the game creates a map.
 
 ## Features
 
-- **Off** leaves the game's normal seed behavior in place while keeping the selector visible.
-- Named seeds appear by name. Blank or unreadable names fall back to the seed value.
-- Add seeds in-game with a name and a decimal or hexadecimal seed. New entries are selected immediately.
-- The selector and Add Seed button are positioned together; the label and list direction are configurable.
-- The plugin does not edit character save files.
+- **Off** uses the game's normal per-character map behavior while keeping the selector visible.
+- Saved seeds can have names; blank or unreadable names display the seed value.
+- Add seeds in-game with a name and a decimal or hexadecimal seed. New entries are saved and selected immediately.
+- The question button on the Add Seed prompt opens the last-seed panel. It displays the last gameplay seed in decimal and copies it to the clipboard. Click the question button again to close the panel.
+- The selector, label, and Add Seed button share one position anchor. Label placement and dropdown expansion direction are configurable.
+- The plugin does not modify character save files.
 
 ## D2RLoader setting
 
@@ -16,7 +19,7 @@ Keep **Generate new map layouts** turned off for the intended static map-seed be
 
 ## Configuration
 
-The configuration is `d2rloader/config/map-seed-selector.toml`. The shipped template has no seed entries. The example below adds two; keep all `[[seeds]]` blocks at the end of the file.
+The configuration is `d2rloader/config/map-seed-selector.toml`. The shipped template has no seed entries. Add seed blocks at the end of the file:
 
 ```toml
 config_version = 1
@@ -29,42 +32,41 @@ text_position = "right"
 expand_direction = "below"
 
 [[seeds]]
-name = "Meph"
-seed = 1056279548
+name = "My first map"
+seed = 123456789
 
 [[seeds]]
-name = "Ancient Tunnels"
-seed = 0x3FC14219
+name = "Another map"
+seed = 0x12345678
 ```
 
-`position_x` and `position_y` place the Add Seed button's upper-left corner in UI pixels, measured from the screen's upper-left. This is the anchor for the button, selector, and label; the selector sits 56 pixels to the right. `text_position` accepts `above`, `below`, `left`, or `right`. `expand_direction` accepts `above` or `below`.
+`position_x` and `position_y` place the Add Seed button's upper-left corner in UI pixels, measured from the screen's upper-left. The selector and label move with it; the selector sits 56 pixels to the right. `text_position` accepts `above`, `below`, `left`, or `right`. `expand_direction` accepts `above` or `below`.
 
-Seed values are unsigned 32-bit integers in decimal or hexadecimal. Names are optional; use unique printable ASCII names for readable entries. `selected_seed` stores the current choice; `"character"` is the stored value for **Off**.
+Seed values are unsigned 32-bit integers in decimal or hexadecimal. Names are optional and must be unique printable ASCII. `selected_seed` stores the current choice; `"character"` is the stored value for **Off**.
 
-The in-game Add Seed prompt accepts a name and seed. Tab switches fields, Enter adds the seed, and Escape closes the prompt. A successfully saved seed is appended to the end of the TOML file and becomes the selected option immediately.
+In the Add Seed prompt, Tab switches between fields, Enter adds the seed, and Escape closes the prompt. A successfully saved seed is appended to the TOML file and selected immediately.
 
 ## Compatibility
 
-The plugin targets D2RLoader plugin ABI 4 and is built with the official PluginSDK 0.4.0. It operates in Offline character selection; the seed override is disabled on the online selection route. Before installing its game hooks, it checks the expected instruction bytes and disables seed injection if the layout is unsupported. It uses the native dropdown callbacks when available and a D2R-styled fallback otherwise.
+The plugin targets D2RLoader plugin ABI 4 and uses the official PluginSDK 0.4.0. It operates in Offline character selection; seed overrides are disabled on the online selection route. Before installing game hooks, it checks expected instruction bytes and disables seed injection if the layout does not match. The selector uses native dropdown callbacks when available, with a D2R-styled fallback.
 
 ## Build
 
-Requirements: Windows x64, CMake 3.29 or newer, Visual Studio 2022 or newer with the MSVC C++ toolchain, Windows SDK, and MASM x64 assembler. The first configure fetches the pinned PluginSDK revision.
+Requirements: Windows x64, CMake 3.29 or newer, Visual Studio/MSVC, Windows SDK, and MASM x64 assembler. The first configure fetches the pinned PluginSDK revision.
 
-From a Visual Studio Developer PowerShell in the plugin directory:
+From an x64 Visual Studio Developer Command Prompt in the plugin directory:
 
 ```powershell
-cmake -S . -B build -A x64
+cmake -S . -B build -G "NMake Makefiles"
 cmake --build build --config Release --target map_seed_selector
 ```
 
-The DLL is written to `build/Release/d2rl-map-seed-selector.dll`.
+The DLL is written to `build/d2rl-map-seed-selector.dll`.
 
 ## Install
 
-Copy the DLL to D2RLoader's global `d2rloader/plugins/` folder or the active mod's plugin folder. The configuration file is created on first load if it does not exist. Restart D2RLoader after replacing the DLL.
+Copy `d2rl-map-seed-selector.dll` to D2RLoader's global `d2rloader/plugins/` folder or the active mod's plugin folder. Copy the seedless `map-seed-selector.toml` template to `d2rloader/config/` if the plugin has not created a configuration yet. Restart D2RLoader after replacing the DLL.
 
 ## License
 
 MIT. See [LICENSE](LICENSE).
-

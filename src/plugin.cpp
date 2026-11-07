@@ -28,9 +28,9 @@ namespace {
 
 constexpr std::size_t SelectorPanelSlotCount = 17;
 constexpr std::size_t KeptClosedSelectorPanels = 8;
-// The loader limits each plugin to 64 panels. The selector currently owns 35,
-// so the remaining 29 are used as rotating Add Seed views while text changes.
-constexpr std::size_t AddSeedDialogSlotCount = 29;
+// The loader limits each plugin to 64 panels. The selector and auxiliary UI
+// use 36, leaving 28 rotating Add Seed views while text changes.
+constexpr std::size_t AddSeedDialogSlotCount = 28;
 constexpr auto PanelUnloadCooldown = std::chrono::milliseconds(1500);
 struct SelectorPanelCacheEntry {
     bool loaded{};
@@ -53,6 +53,9 @@ constexpr char DropdownToggleMessage[] = "map-seed-selector/ToggleDropdown";
 constexpr char OpenAddSeedMessage[] = "map-seed-selector/OpenAddSeed";
 constexpr char CommitAddSeedMessage[] = "map-seed-selector/CommitAddSeed";
 constexpr char CancelAddSeedMessage[] = "map-seed-selector/CancelAddSeed";
+constexpr char ShowAddSeedHelpMessage[] = "map-seed-selector/ShowAddSeedHelp";
+constexpr char CopyCurrentSeedMessage[] = "map-seed-selector/CopyCurrentSeed";
+constexpr char CloseCurrentSeedMessage[] = "map-seed-selector/CloseCurrentSeed";
 constexpr char FocusSeedNameMessage[] = "map-seed-selector/FocusSeedName";
 constexpr char FocusSeedValueMessage[] = "map-seed-selector/FocusSeedValue";
 constexpr char ChoiceMessagePrefix[] = "map-seed-selector/Choose_";
@@ -62,14 +65,31 @@ std::string OptionsLayoutResourcePath{
     "data/global/ui/layouts/map-seed-selector/SeedOptions0hd.json"};
 constexpr char AddSeedButtonLayoutResourcePath[] =
     "data/global/ui/layouts/map-seed-selector/AddSeedButtonhd.json";
+constexpr char CurrentSeedPanelLocalId[] = "CurrentSeed";
+constexpr char QualifiedCurrentSeedPanelName[] =
+    "map-seed-selector/CurrentSeed";
+constexpr char CurrentSeedPanelLayoutResourcePath[] =
+    "data/global/ui/layouts/map-seed-selector/CurrentSeedhd.json";
 constexpr char AddSeedButtonSpriteResourcePath[] =
     "data/hd/global/ui/d2rloader/map-seed-selector/addseedbutton.sprite";
 constexpr char AddSeedButtonLowEndSpriteResourcePath[] =
     "data/hd/global/ui/d2rloader/map-seed-selector/addseedbutton.lowend.sprite";
+constexpr char QuestionButtonSpriteResourcePath[] =
+    "data/hd/global/ui/d2rloader/map-seed-selector/questionbutton.sprite";
+constexpr char QuestionButtonLowEndSpriteResourcePath[] =
+    "data/hd/global/ui/d2rloader/map-seed-selector/questionbutton.lowend.sprite";
 constexpr char ModalButtonSpriteResourcePath[] =
     "data/hd/global/ui/d2rloader/map-seed-selector/modalbutton.sprite";
 constexpr char ModalButtonLowEndSpriteResourcePath[] =
     "data/hd/global/ui/d2rloader/map-seed-selector/modalbutton.lowend.sprite";
+constexpr char CurrentSeedPanelSpriteResourcePath[] =
+    "data/hd/global/ui/d2rloader/map-seed-selector/currentseedpanel.sprite";
+constexpr char CurrentSeedPanelLowEndSpriteResourcePath[] =
+    "data/hd/global/ui/d2rloader/map-seed-selector/currentseedpanel.lowend.sprite";
+constexpr char CurrentSeedPanelButtonSpriteResourcePath[] =
+    "data/hd/global/ui/d2rloader/map-seed-selector/currentseedpanelbutton.sprite";
+constexpr char CurrentSeedPanelButtonLowEndSpriteResourcePath[] =
+    "data/hd/global/ui/d2rloader/map-seed-selector/currentseedpanelbutton.lowend.sprite";
 constexpr char BlankSpriteResourcePath[] =
     "data/hd/global/ui/d2rloader/map-seed-selector/blank.sprite";
 constexpr char BlankSpriteLowEndResourcePath[] =
@@ -118,6 +138,55 @@ constexpr char AddSeedButtonLayoutTemplate[] = R"json({
     }
   ]
 })json";
+constexpr char CurrentSeedPanelLayoutTemplate[] = R"json({
+  "type": "Panel",
+  "name": "map-seed-selector/CurrentSeed",
+    "fields": { "priority": 9010, "anchor": { "x": 0.5, "y": 0.5 } },
+    "children": [
+    { "type": "ImageWidget", "name": "Frame",
+      "fields": { "rect": { "x": 627, "y": -270, "width": 473, "height": 227 }, "filename": "d2rloader\\map-seed-selector\\currentseedpanel" } },
+    { "type": "TextBoxWidget", "name": "CurrentSeedTitle", "fields": {
+      "rect": { "x": 645, "y": -260, "width": 440, "height": 42 },
+      "text": "Map Seed", "style": { "fontColor": "$FontColorGoldYellow", "pointSize": "$MediumFontSize", "dropShadow": "$DefaultDropShadow" } } },
+    { "type": "TextBoxWidget", "name": "CurrentSeedValue", "fields": {
+      "rect": { "x": 645, "y": -206, "width": 440, "height": 42 },
+      "text": "@seed_text@", "style": { "fontColor": "$FontColorWhite", "pointSize": "$LargeFontSize", "dropShadow": "$DefaultDropShadow", "alignment": { "h": "center", "v": "center" } } } },
+    { "type": "TextBoxWidget", "name": "CurrentSeedStatus", "fields": {
+      "rect": { "x": 700, "y": -155, "width": 331, "height": 24 },
+      "text": "@seed_status@", "style": { "fontColor": "$FontColorLightGold", "pointSize": "$SmallFontSize", "dropShadow": "$DefaultDropShadow", "alignment": { "h": "center", "v": "center" } } } },
+    { "type": "ButtonWidget", "name": "CopyCurrentSeed", "fields": {
+      "rect": { "x": 714, "y": -110, "width": 133, "height": 49 },
+      "filename": "d2rloader\\map-seed-selector\\currentseedpanelbutton", "focusIndicatorFilename": "Controller/HoverImages/ModalButton_Hover",
+      "pressedFrame": 1, "disabledFrame": 2, "hoveredFrame": 3, "textString": "Copy", "pointSize": 24, "textColor": "$FontColorWhite",
+      "onClickMessage": "PanelManager:ClosePanel:map-seed-selector/CopyCurrentSeed" } },
+    { "type": "ButtonWidget", "name": "CloseCurrentSeed", "fields": {
+      "rect": { "x": 884, "y": -110, "width": 133, "height": 49 },
+      "filename": "d2rloader\\map-seed-selector\\currentseedpanelbutton", "focusIndicatorFilename": "Controller/HoverImages/ModalButton_Hover",
+      "pressedFrame": 1, "disabledFrame": 2, "hoveredFrame": 3, "textString": "Close", "pointSize": 24, "textColor": "$FontColorWhite",
+      "onClickMessage": "PanelManager:ClosePanel:map-seed-selector/CloseCurrentSeed" } }
+  ]
+})json";
+auto BuildCurrentSeedPanelLayout(bool hasSeed, std::uint32_t seed)
+        -> std::string {
+    std::string layout = CurrentSeedPanelLayoutTemplate;
+    const auto replace = [&layout](std::string_view token,
+            std::string_view value) {
+        std::size_t position{};
+        while ((position = layout.find(token, position))
+                != std::string::npos) {
+            layout.replace(position, token.size(), value);
+            position += value.size();
+        }
+    };
+    const std::string seedText = hasSeed
+        ? std::to_string(seed) : "Not captured";
+    const std::string status = hasSeed
+        ? ""
+        : "Enter game";
+    replace("@seed_text@", seedText);
+    replace("@seed_status@", status);
+    return layout;
+}
 constexpr char DefaultConfig[] = R"toml(# Map Seed Selector
 # Add [[seeds]] blocks below for the offline map seeds you want to choose.
 
@@ -144,7 +213,7 @@ constexpr D2RL::PluginInfo Info{
     .abiVersion = D2RL_PLUGIN_ABI_VERSION,
     .id = "map-seed-selector",
     .name = "Map Seed Selector",
-    .version = "0.1.36",
+    .version = "0.1.52",
     .author = "MadMike",
     .description = "Selects configured offline map seeds on the character screen.",
     .flags = D2RL::PluginFlags::Client | D2RL::PluginFlags::NativeHooks,
@@ -163,8 +232,14 @@ D2RL::Resources::RegistrationHandle OptionsLayoutHandle{D2RL::Resources::Invalid
 D2RL::Resources::RegistrationHandle AddSeedButtonLayoutHandle{D2RL::Resources::InvalidHandle};
 D2RL::Resources::RegistrationHandle AddSeedButtonSpriteHandle{D2RL::Resources::InvalidHandle};
 D2RL::Resources::RegistrationHandle AddSeedButtonLowEndSpriteHandle{D2RL::Resources::InvalidHandle};
+D2RL::Resources::RegistrationHandle QuestionButtonSpriteHandle{D2RL::Resources::InvalidHandle};
+D2RL::Resources::RegistrationHandle QuestionButtonLowEndSpriteHandle{D2RL::Resources::InvalidHandle};
 D2RL::Resources::RegistrationHandle ModalButtonSpriteHandle{D2RL::Resources::InvalidHandle};
 D2RL::Resources::RegistrationHandle ModalButtonLowEndSpriteHandle{D2RL::Resources::InvalidHandle};
+D2RL::Resources::RegistrationHandle CurrentSeedPanelSpriteHandle{D2RL::Resources::InvalidHandle};
+D2RL::Resources::RegistrationHandle CurrentSeedPanelLowEndSpriteHandle{D2RL::Resources::InvalidHandle};
+D2RL::Resources::RegistrationHandle CurrentSeedPanelButtonSpriteHandle{D2RL::Resources::InvalidHandle};
+D2RL::Resources::RegistrationHandle CurrentSeedPanelButtonLowEndSpriteHandle{D2RL::Resources::InvalidHandle};
 D2RL::Resources::RegistrationHandle BlankSpriteHandle{D2RL::Resources::InvalidHandle};
 D2RL::Resources::RegistrationHandle BlankSpriteLowEndHandle{D2RL::Resources::InvalidHandle};
 std::array<D2RL::Resources::RegistrationHandle, 4> CompositeSpriteHandles{
@@ -174,6 +249,10 @@ std::array<D2RL::Resources::RegistrationHandle, 4> CompositeSpriteHandles{
 D2RL::Panels::RegistrationHandle PanelHandle{D2RL::Panels::InvalidHandle};
 D2RL::Panels::RegistrationHandle OptionsPanelHandle{D2RL::Panels::InvalidHandle};
 D2RL::Panels::RegistrationHandle AddSeedButtonPanelHandle{D2RL::Panels::InvalidHandle};
+D2RL::Resources::RegistrationHandle CurrentSeedPanelLayoutHandle{D2RL::Resources::InvalidHandle};
+D2RL::Panels::RegistrationHandle CurrentSeedPanelHandle{D2RL::Panels::InvalidHandle};
+std::string CurrentSeedPanelLayoutJson{};
+std::atomic_bool CurrentSeedPanelLayoutLoaded{};
 std::array<D2RL::Resources::RegistrationHandle, SelectorPanelSlotCount>
     SelectorLayoutHandles{};
 std::array<D2RL::Resources::RegistrationHandle, SelectorPanelSlotCount>
@@ -219,6 +298,7 @@ std::atomic_bool AddSeedActionPending{};
 std::atomic_bool AddSeedDialogOpen{};
 std::atomic_int AddSeedFocusedField{};
 std::atomic_bool AddSeedTypingEnabled{};
+std::atomic_bool CurrentSeedPanelOpen{};
 std::atomic_bool AddSeedTextChanged{};
 std::atomic_bool AddSeedTextRefreshPending{};
 std::array<std::uint8_t, 44> BlankSpriteBytes{};
@@ -240,6 +320,7 @@ void ScheduleDropdownChanged() noexcept;
 void SchedulePickerAction(int action) noexcept;
 void ScheduleAddSeedAction(int action) noexcept;
 void ScheduleAddSeedTextRefresh() noexcept;
+void CloseCurrentSeedPanel(const D2RL::PluginContext* context) noexcept;
 void StopAddSeedKeyboard() noexcept;
 auto StartAddSeedKeyboard() noexcept -> bool;
 auto RefreshAddSeedDialog(const D2RL::PluginContext* context) noexcept
@@ -699,6 +780,14 @@ auto BuildAddSeedDialogLayout(std::size_t slot, std::string_view name,
       { "type": "TextBoxWidget", "name": "Title", "fields": {
         "rect": { "x": 78, "y": 52, "width": 1076, "height": 68 },
         "text": "Add Map Seed", "style": "$StyleSettingsTitle" } },
+      { "type": "ButtonWidget", "name": "AddSeedHelp", "fields": {
+        "rect": { "x": 1102, "y": 58, "width": 56, "height": 56 },
+        "filename": "d2rloader\\map-seed-selector\\questionbutton",
+        "normalFrame": 0, "pressedFrame": 1, "disabledFrame": 2, "hoveredFrame": 3,
+        "sound": "cursor_button_click_hd",
+        "tooltipString": "Show the last map seed used and copy it.",
+        "tooltipStyle": "$StyHlpTt",
+        "onClickMessage": "PanelManager:ClosePanel:map-seed-selector/ShowAddSeedHelp" } },
       { "type": "TextBoxWidget", "name": "NameLabel", "fields": {
         "rect": { "x": 277, "y": 135, "width": 700, "height": 30 },
         "text": "Name", "style": { "fontColor": "$FontColorGoldYellow", "pointSize": "$MediumFontSize", "dropShadow": "$DefaultDropShadow", "alignment": { "h": "center", "v": "center" } } } },
@@ -833,8 +922,148 @@ void ScheduleAddSeedAction(int action) noexcept {
         PendingAddSeedAction.store(-1, std::memory_order_release);
         AddSeedActionPending.store(false, std::memory_order_release);
         D2RL::LogWarnF(Context,
-            "MapSeedSelector: Add Seed prompt action could not be scheduled (result=%u).",
+            "MapSeedSelector: Add Seed UI action could not be scheduled (result=%u).",
             static_cast<unsigned>(result));
+    }
+}
+
+auto UnloadCurrentSeedPanelLayout(
+        const D2RL::PluginContext* context) noexcept -> bool {
+    if (!CurrentSeedPanelLayoutLoaded.load(std::memory_order_acquire)) return true;
+    if (context == nullptr || context != Context || WidgetService == nullptr
+            || WidgetService->dispatchUiAction == nullptr) {
+        return false;
+    }
+    const D2RL::Widgets::UiAction unload{
+        .structSize = D2RL::Widgets::UiActionSize,
+        .flags = 0,
+        .target = "PanelManager",
+        .command = "UnloadPanel",
+        .text = QualifiedCurrentSeedPanelName,
+    };
+    const auto result = WidgetService->dispatchUiAction(context, &unload);
+    if (result != D2RL::Widgets::Result::Success) {
+        D2RL::LogWarnF(context,
+            "MapSeedSelector: current-seed panel could not be unloaded (result=%u).",
+            static_cast<unsigned>(result));
+        return false;
+    }
+    CurrentSeedPanelLayoutLoaded.store(false, std::memory_order_release);
+    return true;
+}
+
+auto RefreshCurrentSeedPanelLayout(const D2RL::PluginContext* context,
+        bool hasSeed, std::uint32_t seed) noexcept -> bool {
+    if (context == nullptr || context != Context || ResourceService == nullptr
+            || ResourceService->registerResource == nullptr
+            || ResourceService->unregisterResource == nullptr
+            || !UnloadCurrentSeedPanelLayout(context)) {
+        return false;
+    }
+    if (CurrentSeedPanelLayoutHandle != D2RL::Resources::InvalidHandle) {
+        const auto result = ResourceService->unregisterResource(context,
+            CurrentSeedPanelLayoutHandle);
+        if (result != D2RL::Resources::Result::Success) {
+            D2RL::LogWarnF(context,
+                "MapSeedSelector: current-seed layout could not be refreshed (result=%u).",
+                static_cast<unsigned>(result));
+            return false;
+        }
+        CurrentSeedPanelLayoutHandle = D2RL::Resources::InvalidHandle;
+    }
+    CurrentSeedPanelLayoutJson = BuildCurrentSeedPanelLayout(hasSeed, seed);
+    const D2RL::Resources::ResourceRegistration layout{
+        .structSize = D2RL::Resources::ResourceRegistrationSize,
+        .flags = 0,
+        .path = CurrentSeedPanelLayoutResourcePath,
+        .bytes = CurrentSeedPanelLayoutJson.data(),
+        .byteCount = CurrentSeedPanelLayoutJson.size(),
+    };
+    const auto result = ResourceService->registerResource(context, &layout,
+        &CurrentSeedPanelLayoutHandle);
+    if (result != D2RL::Resources::Result::Success
+            || CurrentSeedPanelLayoutHandle
+                == D2RL::Resources::InvalidHandle) {
+        D2RL::LogWarnF(context,
+            "MapSeedSelector: current-seed layout could not be registered (result=%u).",
+            static_cast<unsigned>(result));
+        return false;
+    }
+    return true;
+}
+
+auto CopySeedToClipboard(std::uint32_t seed) noexcept -> bool {
+    const std::wstring text = std::to_wstring(seed);
+    const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (memory == nullptr) return false;
+    auto* destination = static_cast<wchar_t*>(GlobalLock(memory));
+    if (destination == nullptr) {
+        (void)GlobalFree(memory);
+        return false;
+    }
+    std::copy(text.begin(), text.end(), destination);
+    destination[text.size()] = L'\0';
+    (void)GlobalUnlock(memory);
+    if (!OpenClipboard(nullptr)) {
+        (void)GlobalFree(memory);
+        return false;
+    }
+    const bool emptied = EmptyClipboard() != FALSE;
+    const HANDLE clipboardData = emptied
+        ? SetClipboardData(CF_UNICODETEXT, memory) : nullptr;
+    (void)CloseClipboard();
+    if (clipboardData == nullptr) {
+        (void)GlobalFree(memory);
+        return false;
+    }
+    return true;
+}
+
+void OpenCurrentSeedPanel(const D2RL::PluginContext* context) noexcept {
+    if (context == nullptr || context != Context
+            || CurrentSeedPanelHandle == D2RL::Panels::InvalidHandle
+            || PanelService == nullptr || ResourceService == nullptr
+            || WidgetService == nullptr) {
+        if (context == Context) {
+            context->LogWarn("MapSeedSelector: current-seed display services are unavailable.");
+        }
+        return;
+    }
+    std::uint32_t seed{};
+    const bool hasSeed = MapSeedSelector::GetLastObservedMapSeed(seed);
+    if (!RefreshCurrentSeedPanelLayout(context, hasSeed, seed)) {
+        context->LogWarn("MapSeedSelector: current-seed panel could not be prepared.");
+        return;
+    }
+    const bool resumeTyping = AddSeedDialogOpen.load(std::memory_order_acquire);
+    if (resumeTyping) AddSeedTypingEnabled.store(false,
+        std::memory_order_release);
+    const auto openResult = PanelService->openPanel(context,
+        CurrentSeedPanelHandle);
+    if (openResult != D2RL::Panels::Result::Success) {
+        if (resumeTyping) AddSeedTypingEnabled.store(true,
+            std::memory_order_release);
+        D2RL::LogWarnF(context,
+            "MapSeedSelector: current-seed panel could not be opened (result=%u).",
+            static_cast<unsigned>(openResult));
+        return;
+    }
+    CurrentSeedPanelOpen.store(true, std::memory_order_release);
+    CurrentSeedPanelLayoutLoaded.store(true, std::memory_order_release);
+}
+
+void CloseCurrentSeedPanel(const D2RL::PluginContext* context) noexcept {
+    if (context != nullptr && context == Context
+            && PanelService != nullptr
+            && CurrentSeedPanelHandle != D2RL::Panels::InvalidHandle) {
+        (void)PanelService->closePanel(context, CurrentSeedPanelHandle);
+    }
+    const bool wasOpen = CurrentSeedPanelOpen.exchange(false,
+        std::memory_order_acq_rel);
+    if (wasOpen && AddSeedDialogOpen.load(std::memory_order_acquire)) {
+        AddSeedTypingEnabled.store(true, std::memory_order_release);
+        PostAddSeedFieldLoad();
     }
 }
 
@@ -878,6 +1107,12 @@ LRESULT CALLBACK AddSeedKeyboardProc(int code, WPARAM message,
         return CallNextHookEx(AddSeedKeyboardHook, code, message, parameter);
     }
     if (AddSeedConsumedKeys[virtualKey]) return 1;
+    if (CurrentSeedPanelOpen.load(std::memory_order_acquire)
+            && AddSeedGameIsForeground()) {
+        AddSeedConsumedKeys[virtualKey] = true;
+        if (key->vkCode == VK_ESCAPE) ScheduleAddSeedAction(7);
+        return 1;
+    }
     if (!AddSeedTypingEnabled.load(std::memory_order_acquire)
             || !AddSeedDialogOpen.load(std::memory_order_acquire)
             || !AddSeedGameIsForeground()) {
@@ -1230,6 +1465,7 @@ auto RefreshAddSeedDialog(const D2RL::PluginContext* context) noexcept
 void CloseAddSeedDialog(const D2RL::PluginContext* context) noexcept {
     AddSeedTypingEnabled.store(false, std::memory_order_release);
     AddSeedDialogOpen.store(false, std::memory_order_release);
+    CloseCurrentSeedPanel(context);
     if (context == nullptr || context != Context
             || ActiveAddSeedDialogSlot >= AddSeedDialogSlotCount) return;
     auto& slot = AddSeedDialogSlots[ActiveAddSeedDialogSlot];
@@ -1279,6 +1515,26 @@ void __cdecl AddSeedActionOnUi(const D2RL::PluginContext* context,
         PostAddSeedFieldLoad();
         AddSeedStatus.clear();
         (void)RefreshAddSeedDialog(context);
+    } else if (action == 5) {
+        if (AddSeedDialogOpen.load(std::memory_order_acquire)) {
+            if (CurrentSeedPanelOpen.load(std::memory_order_acquire)) {
+                CloseCurrentSeedPanel(context);
+            } else {
+                OpenCurrentSeedPanel(context);
+            }
+        }
+    } else if (action == 6) {
+        std::uint32_t seed{};
+        if (!MapSeedSelector::GetLastObservedMapSeed(seed)) {
+            context->LogWarn("MapSeedSelector: no gameplay map seed has been captured yet.");
+        } else if (CopySeedToClipboard(seed)) {
+            CloseCurrentSeedPanel(context);
+        } else {
+            D2RL::LogWarn(context,
+                "MapSeedSelector: selected seed could not be copied to the clipboard.");
+        }
+    } else if (action == 7) {
+        CloseCurrentSeedPanel(context);
     } else if (action == 2) {
         std::wstring wideName;
         std::wstring wideSeed;
@@ -1386,6 +1642,7 @@ void __cdecl ApplyPanelState(const D2RL::PluginContext* context,
         }
     };
     syncAuxiliaryPanel(AddSeedButtonPanelHandle);
+    if (!shouldOpen) CloseCurrentSeedPanel(context);
     if (OptionsPanelHandle != D2RL::Panels::InvalidHandle) {
         D2RL::Panels::PanelInfo optionsInfo{
             .structSize = D2RL::Panels::PanelInfoSize,
@@ -1470,6 +1727,16 @@ auto __cdecl OnUiMessage(const D2RL::PluginContext* context,
         ? std::string_view(event->text) : std::string_view{};
 
     if (target == "PanelManager" && command == "ClosePanel") {
+        if (message == QualifiedCurrentSeedPanelName) {
+            const bool wasOpen = CurrentSeedPanelOpen.exchange(false,
+                std::memory_order_acq_rel);
+            if (wasOpen
+                    && AddSeedDialogOpen.load(std::memory_order_acquire)) {
+                AddSeedTypingEnabled.store(true, std::memory_order_release);
+                PostAddSeedFieldLoad();
+            }
+            return D2RL::SharedEvents::UiMessageAction::Continue;
+        }
         if (message == OpenAddSeedMessage) {
             ScheduleAddSeedAction(0);
             return D2RL::SharedEvents::UiMessageAction::Consume;
@@ -1480,6 +1747,18 @@ auto __cdecl OnUiMessage(const D2RL::PluginContext* context,
         }
         if (message == CancelAddSeedMessage) {
             ScheduleAddSeedAction(1);
+            return D2RL::SharedEvents::UiMessageAction::Consume;
+        }
+        if (message == ShowAddSeedHelpMessage) {
+            ScheduleAddSeedAction(5);
+            return D2RL::SharedEvents::UiMessageAction::Consume;
+        }
+        if (message == CopyCurrentSeedMessage) {
+            ScheduleAddSeedAction(6);
+            return D2RL::SharedEvents::UiMessageAction::Consume;
+        }
+        if (message == CloseCurrentSeedMessage) {
+            ScheduleAddSeedAction(7);
             return D2RL::SharedEvents::UiMessageAction::Consume;
         }
         if (message == FocusSeedNameMessage) {
@@ -1664,6 +1943,8 @@ auto QueryServices(const D2RL::PluginContext* context) noexcept -> bool {
 }
 
 void UnregisterUi() noexcept {
+    CloseCurrentSeedPanel(Context);
+    (void)UnloadCurrentSeedPanelLayout(Context);
     if (ActiveAddSeedDialogSlot < AddSeedDialogSlotCount) {
         CloseAddSeedDialog(Context);
     }
@@ -1672,6 +1953,7 @@ void UnregisterUi() noexcept {
     DesiredPanelOpen.store(false, std::memory_order_release);
     AddSeedDialogOpen.store(false, std::memory_order_release);
     AddSeedTypingEnabled.store(false, std::memory_order_release);
+    CurrentSeedPanelOpen.store(false, std::memory_order_release);
     AddSeedTextRefreshPending.store(false, std::memory_order_release);
     AddSeedTextChanged.store(false, std::memory_order_release);
     PanelSyncPending.store(false, std::memory_order_release);
@@ -1722,6 +2004,10 @@ void UnregisterUi() noexcept {
         }
     }
     if (Context != nullptr && PanelService != nullptr
+            && CurrentSeedPanelHandle != D2RL::Panels::InvalidHandle) {
+        (void)PanelService->unregisterPanel(Context, CurrentSeedPanelHandle);
+    }
+    if (Context != nullptr && PanelService != nullptr
             && AddSeedButtonPanelHandle != D2RL::Panels::InvalidHandle) {
         (void)PanelService->unregisterPanel(Context,
             AddSeedButtonPanelHandle);
@@ -1749,6 +2035,12 @@ void UnregisterUi() noexcept {
         }
     }
     if (Context != nullptr && ResourceService != nullptr
+            && CurrentSeedPanelLayoutHandle
+                != D2RL::Resources::InvalidHandle) {
+        (void)ResourceService->unregisterResource(Context,
+            CurrentSeedPanelLayoutHandle);
+    }
+    if (Context != nullptr && ResourceService != nullptr
             && AddSeedButtonLayoutHandle != D2RL::Resources::InvalidHandle) {
         (void)ResourceService->unregisterResource(Context,
             AddSeedButtonLayoutHandle);
@@ -1766,6 +2058,18 @@ void UnregisterUi() noexcept {
             AddSeedButtonSpriteHandle);
     }
     if (Context != nullptr && ResourceService != nullptr
+            && QuestionButtonLowEndSpriteHandle
+                != D2RL::Resources::InvalidHandle) {
+        (void)ResourceService->unregisterResource(Context,
+            QuestionButtonLowEndSpriteHandle);
+    }
+    if (Context != nullptr && ResourceService != nullptr
+            && QuestionButtonSpriteHandle
+                != D2RL::Resources::InvalidHandle) {
+        (void)ResourceService->unregisterResource(Context,
+            QuestionButtonSpriteHandle);
+    }
+    if (Context != nullptr && ResourceService != nullptr
             && ModalButtonLowEndSpriteHandle
                 != D2RL::Resources::InvalidHandle) {
         (void)ResourceService->unregisterResource(Context,
@@ -1776,6 +2080,30 @@ void UnregisterUi() noexcept {
                 != D2RL::Resources::InvalidHandle) {
         (void)ResourceService->unregisterResource(Context,
             ModalButtonSpriteHandle);
+    }
+    if (Context != nullptr && ResourceService != nullptr
+            && CurrentSeedPanelLowEndSpriteHandle
+                != D2RL::Resources::InvalidHandle) {
+        (void)ResourceService->unregisterResource(Context,
+            CurrentSeedPanelLowEndSpriteHandle);
+    }
+    if (Context != nullptr && ResourceService != nullptr
+            && CurrentSeedPanelSpriteHandle
+                != D2RL::Resources::InvalidHandle) {
+        (void)ResourceService->unregisterResource(Context,
+            CurrentSeedPanelSpriteHandle);
+    }
+    if (Context != nullptr && ResourceService != nullptr
+            && CurrentSeedPanelButtonLowEndSpriteHandle
+                != D2RL::Resources::InvalidHandle) {
+        (void)ResourceService->unregisterResource(Context,
+            CurrentSeedPanelButtonLowEndSpriteHandle);
+    }
+    if (Context != nullptr && ResourceService != nullptr
+            && CurrentSeedPanelButtonSpriteHandle
+                != D2RL::Resources::InvalidHandle) {
+        (void)ResourceService->unregisterResource(Context,
+            CurrentSeedPanelButtonSpriteHandle);
     }
     if (Context != nullptr && ResourceService != nullptr
             && BlankSpriteLowEndHandle != D2RL::Resources::InvalidHandle) {
@@ -1807,6 +2135,8 @@ void UnregisterUi() noexcept {
     ActivePanelSlot = 0;
     SetActivePanelSlot(0);
     AddSeedButtonPanelHandle = D2RL::Panels::InvalidHandle;
+    CurrentSeedPanelHandle = D2RL::Panels::InvalidHandle;
+    CurrentSeedPanelLayoutLoaded.store(false, std::memory_order_release);
     for (auto& slot : AddSeedDialogSlots) {
         slot.layout = D2RL::Resources::InvalidHandle;
         slot.panel = D2RL::Panels::InvalidHandle;
@@ -1824,15 +2154,23 @@ void UnregisterUi() noexcept {
     LayoutHandle = D2RL::Resources::InvalidHandle;
     OptionsLayoutHandle = D2RL::Resources::InvalidHandle;
     AddSeedButtonLayoutHandle = D2RL::Resources::InvalidHandle;
+    CurrentSeedPanelLayoutHandle = D2RL::Resources::InvalidHandle;
     AddSeedButtonSpriteHandle = D2RL::Resources::InvalidHandle;
     AddSeedButtonLowEndSpriteHandle = D2RL::Resources::InvalidHandle;
+    QuestionButtonSpriteHandle = D2RL::Resources::InvalidHandle;
+    QuestionButtonLowEndSpriteHandle = D2RL::Resources::InvalidHandle;
     ModalButtonSpriteHandle = D2RL::Resources::InvalidHandle;
     ModalButtonLowEndSpriteHandle = D2RL::Resources::InvalidHandle;
+    CurrentSeedPanelSpriteHandle = D2RL::Resources::InvalidHandle;
+    CurrentSeedPanelLowEndSpriteHandle = D2RL::Resources::InvalidHandle;
+    CurrentSeedPanelButtonSpriteHandle = D2RL::Resources::InvalidHandle;
+    CurrentSeedPanelButtonLowEndSpriteHandle = D2RL::Resources::InvalidHandle;
     BlankSpriteHandle = D2RL::Resources::InvalidHandle;
     BlankSpriteLowEndHandle = D2RL::Resources::InvalidHandle;
     CompositeSpriteHandles.fill(D2RL::Resources::InvalidHandle);
     OptionsLayoutJson.clear();
     AddSeedButtonLayoutJson.clear();
+    CurrentSeedPanelLayoutJson.clear();
     BlankSpriteBytes.fill(0);
     CompositeSprites = {};
     UiRegistrationPending.store(false, std::memory_order_release);
@@ -2228,7 +2566,7 @@ auto RegisterUi(const D2RL::PluginContext* context) noexcept -> bool {
             return true;
         }
         D2RL::LogWarnF(context,
-            "MapSeedSelector: Add Seed button sprite registration failed for %s (result=%u).",
+            "MapSeedSelector: Add Seed UI sprite registration failed for %s (result=%u).",
             path, static_cast<unsigned>(result));
         return false;
     };
@@ -2238,12 +2576,30 @@ auto RegisterUi(const D2RL::PluginContext* context) noexcept -> bool {
             || !registerButtonSprite(AddSeedButtonLowEndSpriteResourcePath,
                 MapSeedSelector::EmbeddedAssets::AddSeedButtonLowEndSprite,
                 AddSeedButtonLowEndSpriteHandle)
+            || !registerButtonSprite(QuestionButtonSpriteResourcePath,
+                MapSeedSelector::EmbeddedAssets::QuestionButtonSprite,
+                QuestionButtonSpriteHandle)
+            || !registerButtonSprite(QuestionButtonLowEndSpriteResourcePath,
+                MapSeedSelector::EmbeddedAssets::QuestionButtonLowEndSprite,
+                QuestionButtonLowEndSpriteHandle)
             || !registerButtonSprite(ModalButtonSpriteResourcePath,
                 MapSeedSelector::EmbeddedAssets::ModalButtonSprite,
                 ModalButtonSpriteHandle)
             || !registerButtonSprite(ModalButtonLowEndSpriteResourcePath,
                 MapSeedSelector::EmbeddedAssets::ModalButtonLowEndSprite,
-                ModalButtonLowEndSpriteHandle)) {
+                ModalButtonLowEndSpriteHandle)
+            || !registerButtonSprite(CurrentSeedPanelSpriteResourcePath,
+                MapSeedSelector::EmbeddedAssets::CurrentSeedPanelSprite,
+                CurrentSeedPanelSpriteHandle)
+            || !registerButtonSprite(CurrentSeedPanelLowEndSpriteResourcePath,
+                MapSeedSelector::EmbeddedAssets::CurrentSeedPanelLowEndSprite,
+                CurrentSeedPanelLowEndSpriteHandle)
+            || !registerButtonSprite(CurrentSeedPanelButtonSpriteResourcePath,
+                MapSeedSelector::EmbeddedAssets::CurrentSeedPanelButtonSprite,
+                CurrentSeedPanelButtonSpriteHandle)
+            || !registerButtonSprite(CurrentSeedPanelButtonLowEndSpriteResourcePath,
+                MapSeedSelector::EmbeddedAssets::CurrentSeedPanelButtonLowEndSprite,
+                CurrentSeedPanelButtonLowEndSpriteHandle)) {
         return false;
     }
     if (!BuildAddSeedButtonLayout()) {
@@ -2280,6 +2636,39 @@ auto RegisterUi(const D2RL::PluginContext* context) noexcept -> bool {
             "MapSeedSelector: Add Seed button panel registration failed (result=%u, handle=%llu).",
             static_cast<unsigned>(addButtonPanelResult),
             static_cast<unsigned long long>(AddSeedButtonPanelHandle));
+        return false;
+    }
+
+    CurrentSeedPanelLayoutJson = BuildCurrentSeedPanelLayout(false, 0);
+    const D2RL::Resources::ResourceRegistration currentSeedLayout{
+        .structSize = D2RL::Resources::ResourceRegistrationSize,
+        .flags = 0,
+        .path = CurrentSeedPanelLayoutResourcePath,
+        .bytes = CurrentSeedPanelLayoutJson.data(),
+        .byteCount = CurrentSeedPanelLayoutJson.size(),
+    };
+    const auto currentSeedLayoutResult = ResourceService->registerResource(
+        context, &currentSeedLayout, &CurrentSeedPanelLayoutHandle);
+    if (currentSeedLayoutResult != D2RL::Resources::Result::Success
+            || CurrentSeedPanelLayoutHandle
+                == D2RL::Resources::InvalidHandle) {
+        D2RL::LogWarnF(context,
+            "MapSeedSelector: current-seed panel layout registration failed (result=%u).",
+            static_cast<unsigned>(currentSeedLayoutResult));
+        return false;
+    }
+    const D2RL::Panels::PanelRegistration currentSeedPanel{
+        .structSize = D2RL::Panels::PanelRegistrationSize,
+        .flags = D2RL::Panels::PanelFlags::CloseOnEscape,
+        .localId = CurrentSeedPanelLocalId,
+    };
+    const auto currentSeedPanelResult = PanelService->registerPanel(context,
+        &currentSeedPanel, &CurrentSeedPanelHandle);
+    if (currentSeedPanelResult != D2RL::Panels::Result::Success
+            || CurrentSeedPanelHandle == D2RL::Panels::InvalidHandle) {
+        D2RL::LogWarnF(context,
+            "MapSeedSelector: current-seed panel registration failed (result=%u).",
+            static_cast<unsigned>(currentSeedPanelResult));
         return false;
     }
 
@@ -2337,6 +2726,13 @@ auto RegisterUi(const D2RL::PluginContext* context) noexcept -> bool {
             }
         }
         if (PanelService != nullptr
+                && CurrentSeedPanelHandle
+                    != D2RL::Panels::InvalidHandle) {
+            (void)PanelService->unregisterPanel(context,
+                CurrentSeedPanelHandle);
+            CurrentSeedPanelHandle = D2RL::Panels::InvalidHandle;
+        }
+        if (PanelService != nullptr
                 && AddSeedButtonPanelHandle
                     != D2RL::Panels::InvalidHandle) {
             (void)PanelService->unregisterPanel(context,
@@ -2360,6 +2756,13 @@ auto RegisterUi(const D2RL::PluginContext* context) noexcept -> bool {
         }
         AddSeedButtonLayoutHandle = D2RL::Resources::InvalidHandle;
         if (ResourceService != nullptr
+                && CurrentSeedPanelLayoutHandle
+                    != D2RL::Resources::InvalidHandle) {
+            (void)ResourceService->unregisterResource(context,
+                CurrentSeedPanelLayoutHandle);
+        }
+        CurrentSeedPanelLayoutHandle = D2RL::Resources::InvalidHandle;
+        if (ResourceService != nullptr
                 && AddSeedButtonLowEndSpriteHandle
                     != D2RL::Resources::InvalidHandle) {
             (void)ResourceService->unregisterResource(context,
@@ -2374,6 +2777,20 @@ auto RegisterUi(const D2RL::PluginContext* context) noexcept -> bool {
         }
         AddSeedButtonSpriteHandle = D2RL::Resources::InvalidHandle;
         if (ResourceService != nullptr
+                && QuestionButtonLowEndSpriteHandle
+                    != D2RL::Resources::InvalidHandle) {
+            (void)ResourceService->unregisterResource(context,
+                QuestionButtonLowEndSpriteHandle);
+        }
+        QuestionButtonLowEndSpriteHandle = D2RL::Resources::InvalidHandle;
+        if (ResourceService != nullptr
+                && QuestionButtonSpriteHandle
+                    != D2RL::Resources::InvalidHandle) {
+            (void)ResourceService->unregisterResource(context,
+                QuestionButtonSpriteHandle);
+        }
+        QuestionButtonSpriteHandle = D2RL::Resources::InvalidHandle;
+        if (ResourceService != nullptr
                 && ModalButtonLowEndSpriteHandle
                     != D2RL::Resources::InvalidHandle) {
             (void)ResourceService->unregisterResource(context,
@@ -2387,6 +2804,34 @@ auto RegisterUi(const D2RL::PluginContext* context) noexcept -> bool {
                 ModalButtonSpriteHandle);
         }
         ModalButtonSpriteHandle = D2RL::Resources::InvalidHandle;
+        if (ResourceService != nullptr
+                && CurrentSeedPanelLowEndSpriteHandle
+                    != D2RL::Resources::InvalidHandle) {
+            (void)ResourceService->unregisterResource(context,
+                CurrentSeedPanelLowEndSpriteHandle);
+        }
+        CurrentSeedPanelLowEndSpriteHandle = D2RL::Resources::InvalidHandle;
+        if (ResourceService != nullptr
+                && CurrentSeedPanelSpriteHandle
+                    != D2RL::Resources::InvalidHandle) {
+            (void)ResourceService->unregisterResource(context,
+                CurrentSeedPanelSpriteHandle);
+        }
+        CurrentSeedPanelSpriteHandle = D2RL::Resources::InvalidHandle;
+        if (ResourceService != nullptr
+                && CurrentSeedPanelButtonLowEndSpriteHandle
+                    != D2RL::Resources::InvalidHandle) {
+            (void)ResourceService->unregisterResource(context,
+                CurrentSeedPanelButtonLowEndSpriteHandle);
+        }
+        CurrentSeedPanelButtonLowEndSpriteHandle = D2RL::Resources::InvalidHandle;
+        if (ResourceService != nullptr
+                && CurrentSeedPanelButtonSpriteHandle
+                    != D2RL::Resources::InvalidHandle) {
+            (void)ResourceService->unregisterResource(context,
+                CurrentSeedPanelButtonSpriteHandle);
+        }
+        CurrentSeedPanelButtonSpriteHandle = D2RL::Resources::InvalidHandle;
         context->LogWarn("MapSeedSelector: Add Seed UI could not be registered; the seed picker remains available.");
     }
 

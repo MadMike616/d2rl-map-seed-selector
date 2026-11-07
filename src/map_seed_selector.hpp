@@ -27,6 +27,7 @@ void GetAddSeedButtonPosition(std::int32_t& x, std::int32_t& y) noexcept;
 [[nodiscard]] auto GetOptionsPanelHeight() noexcept -> std::int32_t;
 void HandleDropdownChanged() noexcept;
 void SelectChoice(std::size_t choice) noexcept;
+[[nodiscard]] auto GetLastObservedMapSeed(std::uint32_t& seed) noexcept -> bool;
 [[nodiscard]] auto AddSeedEntry(std::string_view name,
     std::string_view seedText, std::string& message) noexcept -> bool;
 void RefreshUi() noexcept;
@@ -44,6 +45,8 @@ extern volatile long gDrlgSeedObservedLcg;
 extern volatile long gGameSeedIngressCalls;
 extern volatile long gGameSeedIngressInput;
 extern volatile long gGameSeedIngressWritten;
+extern volatile long gLastObservedMapSeed;
+extern volatile long gLastObservedMapSeedValid;
 void MapDrlgSeedInitializationHook() noexcept;
 void MapDrlgSeedPostWriteHook() noexcept;
 void MapGameSeedIngressHook() noexcept;

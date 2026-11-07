@@ -12,6 +12,8 @@ EXTERN gDrlgSeedObservedLcg:DWORD
 EXTERN gGameSeedIngressCalls:DWORD
 EXTERN gGameSeedIngressInput:DWORD
 EXTERN gGameSeedIngressWritten:DWORD
+EXTERN gLastObservedMapSeed:DWORD
+EXTERN gLastObservedMapSeedValid:DWORD
 EXTERN gSavedSeedCopyACalls:DWORD
 EXTERN gSavedSeedCopyAInput:DWORD
 EXTERN gSavedSeedCopyAWritten:DWORD
@@ -45,8 +47,17 @@ MapDrlgSeedInitializationHook PROC
     mov DWORD PTR [gDrlgSeedWritten], ebx
     mov DWORD PTR [rdi], ebx
     mov DWORD PTR [rdi+4], 29Ah
+    mov DWORD PTR [gLastObservedMapSeed], ebx
+    mov r11d, 1
+    xchg DWORD PTR [gLastObservedMapSeedValid], r11d
     lock inc DWORD PTR [gDrlgSeedOverrideCalls]
+    jmp SeedInitializationContinue
 SeedInitializationUseOriginal:
+    mov r11d, DWORD PTR [rdi]
+    mov DWORD PTR [gLastObservedMapSeed], r11d
+    mov r11d, 1
+    xchg DWORD PTR [gLastObservedMapSeedValid], r11d
+SeedInitializationContinue:
     pop r11
     popfq
     jmp QWORD PTR [gOriginalDrlgSeedInitialization]

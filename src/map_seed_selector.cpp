@@ -31,6 +31,8 @@ __declspec(align(4)) volatile long gDrlgSeedObservedLcg{};
 __declspec(align(4)) volatile long gGameSeedIngressCalls{};
 __declspec(align(4)) volatile long gGameSeedIngressInput{};
 __declspec(align(4)) volatile long gGameSeedIngressWritten{};
+__declspec(align(4)) volatile long gLastObservedMapSeed{};
+__declspec(align(4)) volatile long gLastObservedMapSeedValid{};
 __declspec(align(4)) volatile long gSavedSeedCopyACalls{};
 __declspec(align(4)) volatile long gSavedSeedCopyAInput{};
 __declspec(align(4)) volatile long gSavedSeedCopyAWritten{};
@@ -1027,6 +1029,8 @@ auto Initialize(const D2RL::PluginContext* context) noexcept -> bool {
     InterlockedExchange(&gGameSeedIngressCalls, 0);
     InterlockedExchange(&gGameSeedIngressInput, 0);
     InterlockedExchange(&gGameSeedIngressWritten, 0);
+    InterlockedExchange(&gLastObservedMapSeed, 0);
+    InterlockedExchange(&gLastObservedMapSeedValid, 0);
     if (context == nullptr) return false;
 
     try {
@@ -1290,6 +1294,15 @@ void SelectChoice(std::size_t choice) noexcept {
         }
     }
     if (!NativeDropdownAvailable) RefreshUi();
+}
+
+auto GetLastObservedMapSeed(std::uint32_t& seed) noexcept -> bool {
+    if (InterlockedCompareExchange(&gLastObservedMapSeedValid, 0, 0) == 0) {
+        return false;
+    }
+    seed = static_cast<std::uint32_t>(
+        InterlockedCompareExchange(&gLastObservedMapSeed, 0, 0));
+    return true;
 }
 
 auto AddSeedEntry(std::string_view name, std::string_view seedText,
