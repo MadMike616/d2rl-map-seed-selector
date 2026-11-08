@@ -213,7 +213,7 @@ constexpr D2RL::PluginInfo Info{
     .abiVersion = D2RL_PLUGIN_ABI_VERSION,
     .id = "map-seed-selector",
     .name = "Map Seed Selector",
-    .version = "0.1.52",
+    .version = "0.1.53",
     .author = "MadMike",
     .description = "Selects configured offline map seeds on the character screen.",
     .flags = D2RL::PluginFlags::Client | D2RL::PluginFlags::NativeHooks,

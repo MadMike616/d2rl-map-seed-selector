@@ -1,6 +1,6 @@
 # Map Seed Selector
 
-**D2RLoader plugin by MadMike · v0.1.52**
+**D2RLoader plugin by MadMike · v0.1.53**
 
 Choose a saved map seed from Offline character selection, or add one from the Add Seed prompt. The selected seed is applied when the game creates a map.
 
@@ -54,14 +54,14 @@ The plugin targets D2RLoader plugin ABI 4 and uses the official PluginSDK 0.4.0.
 
 Requirements: Windows x64, CMake 3.29 or newer, Visual Studio/MSVC, Windows SDK, and MASM x64 assembler. The first configure fetches the pinned PluginSDK revision.
 
-From an x64 Visual Studio Developer Command Prompt in the plugin directory:
+From an x64 Visual Studio Developer Command Prompt in the plugin directory, configure the single-configuration NMake generator explicitly for Release:
 
 ```powershell
-cmake -S . -B build -G "NMake Makefiles"
-cmake --build build --config Release --target map_seed_selector
+cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target map_seed_selector
 ```
 
-The DLL is written to `build/d2rl-map-seed-selector.dll`.
+`NMake Makefiles` is a single-configuration generator, so `CMAKE_BUILD_TYPE=Release` selects the Release build. The DLL is written to `build/d2rl-map-seed-selector.dll`.
 
 ## Install
 
