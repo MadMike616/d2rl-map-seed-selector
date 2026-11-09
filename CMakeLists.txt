@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.29)
 
-project(MapSeedSelector VERSION 0.1.53 LANGUAGES CXX RC ASM_MASM)
+project(MapSeedSelector VERSION 0.1.54 LANGUAGES CXX RC ASM_MASM)
 
 include(FetchContent)
 

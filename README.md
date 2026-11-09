@@ -1,6 +1,6 @@
 # Map Seed Selector
 
-**D2RLoader plugin by MadMike · v0.1.53**
+**D2RLoader plugin by MadMike · v0.1.54**
 
 Choose a saved map seed from Offline character selection, or add one from the Add Seed prompt. The selected seed is applied when the game creates a map.
 
@@ -8,10 +8,13 @@ Choose a saved map seed from Offline character selection, or add one from the Ad
 
 - **Off** uses the game's normal per-character map behavior while keeping the selector visible.
 - Saved seeds can have names; blank or unreadable names display the seed value.
+- Right-click a saved seed in the expanded list to open a delete confirmation.
 - Add seeds in-game with a name and a decimal or hexadecimal seed. New entries are saved and selected immediately.
 - The question button on the Add Seed prompt opens the last-seed panel. It displays the last gameplay seed in decimal and copies it to the clipboard. Click the question button again to close the panel.
 - The selector, label, and Add Seed button share one position anchor. Label placement and dropdown expansion direction are configurable.
 - The plugin does not modify character save files.
+- When D2R already supplies the selected seed from the character's saved map, the plugin lets the existing DRLG seed state pass through. It forces the selected seed pair only when the saved map seed differs.
+- Version 0.1.54 preserves matching character seeds on subsequent entries while retaining the override when the saved map seed differs.
 
 ## D2RLoader setting
 

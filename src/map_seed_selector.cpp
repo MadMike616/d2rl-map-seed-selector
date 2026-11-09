@@ -21,29 +21,12 @@
 extern "C" {
 __declspec(align(4)) volatile long gMapSeedOverrideActive{};
 __declspec(align(4)) volatile long gSelectedMapSeed{};
-__declspec(align(4)) volatile long gDrlgSeedOverrideCalls{};
-__declspec(align(4)) volatile long gDrlgSeedInput{};
-__declspec(align(4)) volatile long gDrlgSeedInputState{};
-__declspec(align(4)) volatile long gDrlgSeedWritten{};
-__declspec(align(4)) volatile long gDrlgSeedObservedCalls{};
-__declspec(align(4)) volatile long gDrlgSeedObservedStored{};
-__declspec(align(4)) volatile long gDrlgSeedObservedLcg{};
-__declspec(align(4)) volatile long gGameSeedIngressCalls{};
-__declspec(align(4)) volatile long gGameSeedIngressInput{};
-__declspec(align(4)) volatile long gGameSeedIngressWritten{};
+// 0 = not classified yet, 1 = this entry needed the selected-seed override,
+// 2 = D2R already supplied the selected seed from the character's saved map.
+__declspec(align(4)) volatile long gMapSeedFlowState{};
 __declspec(align(4)) volatile long gLastObservedMapSeed{};
 __declspec(align(4)) volatile long gLastObservedMapSeedValid{};
-__declspec(align(4)) volatile long gSavedSeedCopyACalls{};
-__declspec(align(4)) volatile long gSavedSeedCopyAInput{};
-__declspec(align(4)) volatile long gSavedSeedCopyAWritten{};
-__declspec(align(4)) volatile long gSavedSeedCopyBCalls{};
-__declspec(align(4)) volatile long gSavedSeedCopyBInput{};
-__declspec(align(4)) volatile long gSavedSeedCopyBWritten{};
-__declspec(align(4)) volatile long gSavedSeedCopyCCalls{};
-__declspec(align(4)) volatile long gSavedSeedCopyCInput{};
-__declspec(align(4)) volatile long gSavedSeedCopyCWritten{};
 void* gOriginalDrlgSeedInitialization{};
-void* gOriginalDrlgSeedPostWrite{};
 void* gOriginalGameSeedIngress{};
 void* gOriginalSavedSeedCopyA{};
 void* gOriginalSavedSeedCopyB{};
@@ -57,9 +40,6 @@ constexpr std::uintptr_t DrlgSeedInitializationWitnessRva = 0x326E89;
 constexpr std::uintptr_t DrlgSeedInitializationRva = 0x326E9E;
 constexpr std::size_t DrlgSeedInitializationHookOffset = 21;
 constexpr std::size_t DrlgSeedInitializationOverwriteSize = 15;
-constexpr std::uintptr_t DrlgSeedPostWriteRva = DrlgSeedInitializationWitnessRva + 42;
-constexpr std::size_t DrlgSeedPostWriteWitnessOffset = 42;
-constexpr std::size_t DrlgSeedPostWriteOverwriteSize = 15;
 constexpr std::uintptr_t GameSeedIngressRva = 0x48AADB;
 constexpr std::array<std::uint8_t, 18> GameSeedIngressWitness{
     0x44, 0x8B, 0x87, 0x2C, 0x01, 0x00, 0x00,
@@ -164,6 +144,7 @@ enum class ExpandDirection : std::uint8_t {
 const D2RL::PluginContext* Context{};
 const D2RL::WidgetService* WidgetService{};
 std::vector<SeedChoice> Seeds{};
+std::atomic_size_t PublishedSeedCount{};
 std::string ConfigText{};
 std::size_t SelectedChoice{};
 std::int32_t PanelX{};
@@ -558,6 +539,18 @@ auto ChoiceLabel(std::size_t index) -> std::string {
         ? choice.name : FormatSeed(choice.value);
 }
 
+auto ChoiceIndexForDropdownRow(std::size_t visualRow) noexcept
+        -> std::size_t {
+    return SeedExpandDirection == ExpandDirection::Above
+        ? Seeds.size() - visualRow : visualRow;
+}
+
+auto DropdownRowForChoice(std::size_t choiceIndex) noexcept
+        -> std::size_t {
+    return SeedExpandDirection == ExpandDirection::Above
+        ? Seeds.size() - choiceIndex : choiceIndex;
+}
+
 auto ChoiceTooltip(std::size_t index) -> std::string {
     if (index == 0) return {};
     return "Seed: " + std::to_string(Seeds[index - 1].value);
@@ -636,7 +629,7 @@ auto InstallEarlierSeedPathHooks(
     }
 
     context->LogInfo(
-        "MapSeedSelector: all three guarded saved-seed copy hooks were installed; they will pass through while Off is selected.");
+        "MapSeedSelector: all three guarded saved-seed copy hooks were installed; they preserve matching character seeds and inject the selected seed when it differs.");
     return true;
 }
 
@@ -660,7 +653,7 @@ auto InstallGameSeedIngressHook(
         return false;
     }
     context->LogInfo(
-        "MapSeedSelector: guarded Game+0x12C seed-consumer hook installed at D2R+0x48AADB.");
+        "MapSeedSelector: guarded Game+0x12C seed-consumer hook installed at D2R+0x48AADB; it avoids rewriting an already-matching saved seed.");
     return true;
 }
 
@@ -681,21 +674,7 @@ auto InstallSeedHook(const D2RL::PluginContext* context) noexcept -> bool {
                 reinterpret_cast<void*>(MapDrlgSeedInitializationHook),
                 &gOriginalDrlgSeedInitialization)
             && gOriginalDrlgSeedInitialization != nullptr;
-    if (!primaryInstalled) return false;
-
-    const auto* const postWriteInstructions =
-        DrlgSeedInitializationWitness.data() + DrlgSeedPostWriteWitnessOffset;
-    const auto postWriteInstalled = context->InstallInlineHook(
-        DrlgSeedPostWriteRva,
-        postWriteInstructions,
-        static_cast<std::uint32_t>(DrlgSeedPostWriteOverwriteSize),
-        reinterpret_cast<void*>(MapDrlgSeedPostWriteHook),
-        &gOriginalDrlgSeedPostWrite);
-    if (!postWriteInstalled || gOriginalDrlgSeedPostWrite == nullptr) {
-        context->LogWarn(
-            "MapSeedSelector: post-write seed observation hook unavailable; the primary override hook remains active.");
-    }
-    return true;
+    return primaryInstalled;
 }
 
 auto FindRootSelectedSeedLine(std::string& config,
@@ -722,31 +701,39 @@ auto FindRootSelectedSeedLine(std::string& config,
     return false;
 }
 
+auto SetSelectedSeedLine(std::string& config,
+        std::string_view selectedName) -> bool {
+    std::string replacement = "selected_seed = \"";
+    for (const char character : selectedName) {
+        if (character == '\\' || character == '"') replacement.push_back('\\');
+        replacement.push_back(character);
+    }
+    replacement.push_back('"');
+
+    std::size_t lineStart{};
+    std::size_t lineEnd{};
+    if (FindRootSelectedSeedLine(config, lineStart, lineEnd)) {
+        config.replace(lineStart, lineEnd - lineStart, replacement);
+    } else {
+        const auto firstTable = config.find("\n[");
+        if (firstTable == std::string::npos) {
+            if (!config.empty() && config.back() != '\n') config.push_back('\n');
+            config += replacement;
+            config.push_back('\n');
+        } else {
+            config.insert(firstTable + 1, replacement + "\n");
+        }
+    }
+    return true;
+}
+
 auto PersistSelection(std::string_view selectedName) noexcept -> bool {
     if (Context == nullptr) return false;
     try {
         std::string config;
-        if (!ReadConfig(config)) return false;
-        std::string replacement = "selected_seed = \"";
-        for (const char character : selectedName) {
-            if (character == '\\' || character == '"') replacement.push_back('\\');
-            replacement.push_back(character);
-        }
-        replacement.push_back('"');
-
-        std::size_t lineStart{};
-        std::size_t lineEnd{};
-        if (FindRootSelectedSeedLine(config, lineStart, lineEnd)) {
-            config.replace(lineStart, lineEnd - lineStart, replacement);
-        } else {
-            const auto firstTable = config.find("\n[");
-            if (firstTable == std::string::npos) {
-                if (!config.empty() && config.back() != '\n') config.push_back('\n');
-                config += replacement;
-                config.push_back('\n');
-            } else {
-                config.insert(firstTable + 1, replacement + "\n");
-            }
+        if (!ReadConfig(config)
+                || !SetSelectedSeedLine(config, selectedName)) {
+            return false;
         }
         return Context->WriteConfig(config.c_str());
     } catch (...) {
@@ -760,6 +747,9 @@ auto SelectedSeedName() noexcept -> std::string_view {
 }
 
 void ApplySelectedChoice() noexcept {
+    // Re-evaluate whether this entry already has the selected seed whenever
+    // the player changes the choice or enters/leaves Offline character select.
+    InterlockedExchange(&gMapSeedFlowState, 0);
     // Off leaves the hooks installed but sends every seed copy through the
     // game's original trampoline, so map creation behaves as if this plugin
     // were absent while the character-selection panel remains visible.
@@ -934,12 +924,14 @@ auto BuildFallbackSelectorChildren(bool includeOptions) -> std::string {
         const auto optionCount = static_cast<std::int32_t>(Seeds.size() + 1);
         const auto listOffset = SeedExpandDirection == ExpandDirection::Above
             ? -optionCount * OptionRowHeight : DropdownHeight;
-        for (std::size_t index = 0; index <= Seeds.size(); ++index) {
+        for (std::size_t visualRow = 0; visualRow <= Seeds.size();
+                ++visualRow) {
+            const auto index = ChoiceIndexForDropdownRow(visualRow);
             std::int32_t panelX{};
             std::int32_t panelY{};
             GetPanelPosition(panelX, panelY);
             const auto rowY = panelY + DropdownTop() + listOffset
-                + static_cast<std::int32_t>(index) * OptionRowHeight;
+                + static_cast<std::int32_t>(visualRow) * OptionRowHeight;
             const auto rowX = panelX + DropdownLeft();
             result += R"json(,
     {
@@ -962,7 +954,7 @@ auto BuildFallbackSelectorChildren(bool includeOptions) -> std::string {
         "pressedFrame": 1,
         "disabledFrame": 0,
         "hoveredFrame": 1,
-        "sound": "cursor_button_click_hd",
+        "sound": "cursor_menu_select_hd",
         "tooltipString": ")json";
             result += EscapeJson(ChoiceTooltip(index));
             result += R"json(",
@@ -1014,6 +1006,7 @@ auto BuildFallbackSelectorChildren(bool includeOptions) -> std::string {
 auto Initialize(const D2RL::PluginContext* context) noexcept -> bool {
     Context = context;
     Seeds.clear();
+    PublishedSeedCount.store(0, std::memory_order_release);
     SelectedChoice = 0;
     PanelX = 856;
     PanelY = 0;
@@ -1026,9 +1019,7 @@ auto Initialize(const D2RL::PluginContext* context) noexcept -> bool {
     NativeDropdownAvailable = false;
     InterlockedExchange(&gMapSeedOverrideActive, 0);
     InterlockedExchange(&gSelectedMapSeed, 0);
-    InterlockedExchange(&gGameSeedIngressCalls, 0);
-    InterlockedExchange(&gGameSeedIngressInput, 0);
-    InterlockedExchange(&gGameSeedIngressWritten, 0);
+    InterlockedExchange(&gMapSeedFlowState, 0);
     InterlockedExchange(&gLastObservedMapSeed, 0);
     InterlockedExchange(&gLastObservedMapSeedValid, 0);
     if (context == nullptr) return false;
@@ -1044,9 +1035,11 @@ auto Initialize(const D2RL::PluginContext* context) noexcept -> bool {
                 SeedLabelPosition,
                 SeedExpandDirection)) {
             Seeds.clear();
+            PublishedSeedCount.store(0, std::memory_order_release);
             context->LogWarn("MapSeedSelector: invalid seed or UI configuration; the seed picker is disabled.");
             return true;
         }
+        PublishedSeedCount.store(Seeds.size(), std::memory_order_release);
         if (selectedName != OffSelectionValue) {
             const auto selected = std::find_if(Seeds.begin(), Seeds.end(),
                 [&selectedName](const SeedChoice& choice) {
@@ -1068,6 +1061,7 @@ auto Initialize(const D2RL::PluginContext* context) noexcept -> bool {
         return true;
     } catch (...) {
         Seeds.clear();
+        PublishedSeedCount.store(0, std::memory_order_release);
         context->LogWarn("MapSeedSelector: map-seed configuration could not be parsed; the seed picker is disabled.");
         return true;
     }
@@ -1093,100 +1087,8 @@ void SetPanelGeneration(std::uint32_t generation) noexcept {
 }
 
 void SetOfflineFlowActive(bool active) noexcept {
-    if (active) InterlockedExchange(&gDrlgSeedOverrideCalls, 0);
-    if (active) {
-        InterlockedExchange(&gDrlgSeedInput, 0);
-        InterlockedExchange(&gDrlgSeedInputState, 0);
-        InterlockedExchange(&gDrlgSeedWritten, 0);
-        InterlockedExchange(&gDrlgSeedObservedCalls, 0);
-        InterlockedExchange(&gDrlgSeedObservedStored, 0);
-        InterlockedExchange(&gDrlgSeedObservedLcg, 0);
-        InterlockedExchange(&gGameSeedIngressCalls, 0);
-        InterlockedExchange(&gGameSeedIngressInput, 0);
-        InterlockedExchange(&gGameSeedIngressWritten, 0);
-        InterlockedExchange(&gSavedSeedCopyACalls, 0);
-        InterlockedExchange(&gSavedSeedCopyAInput, 0);
-        InterlockedExchange(&gSavedSeedCopyAWritten, 0);
-        InterlockedExchange(&gSavedSeedCopyBCalls, 0);
-        InterlockedExchange(&gSavedSeedCopyBInput, 0);
-        InterlockedExchange(&gSavedSeedCopyBWritten, 0);
-        InterlockedExchange(&gSavedSeedCopyCCalls, 0);
-        InterlockedExchange(&gSavedSeedCopyCInput, 0);
-        InterlockedExchange(&gSavedSeedCopyCWritten, 0);
-    }
     OfflineFlowActive.store(active, std::memory_order_release);
     ApplySelectedChoice();
-}
-
-void LogSeedInitializationSummary() noexcept {
-    if (Context == nullptr || SelectedChoice == 0
-            || !OfflineFlowActive.load(std::memory_order_acquire)) {
-        return;
-    }
-    const auto copyACalls = InterlockedCompareExchange(
-        &gSavedSeedCopyACalls, 0, 0);
-    const auto copyAInput = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&gSavedSeedCopyAInput, 0, 0));
-    const auto copyAWritten = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&gSavedSeedCopyAWritten, 0, 0));
-    const auto copyBCalls = InterlockedCompareExchange(
-        &gSavedSeedCopyBCalls, 0, 0);
-    const auto copyBInput = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&gSavedSeedCopyBInput, 0, 0));
-    const auto copyBWritten = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&gSavedSeedCopyBWritten, 0, 0));
-    const auto copyCCalls = InterlockedCompareExchange(
-        &gSavedSeedCopyCCalls, 0, 0);
-    const auto copyCInput = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&gSavedSeedCopyCInput, 0, 0));
-    const auto copyCWritten = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&gSavedSeedCopyCWritten, 0, 0));
-    const auto gameSeedIngressCalls = InterlockedCompareExchange(
-        &gGameSeedIngressCalls, 0, 0);
-    const auto gameSeedIngressInput = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&gGameSeedIngressInput, 0, 0));
-    const auto gameSeedIngressWritten = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&gGameSeedIngressWritten, 0, 0));
-    D2RL::LogInfoF(Context,
-        "MapSeedSelector: saved-seed ingress A={calls:%ld,input:%s,wrote:%s} B={calls:%ld,input:%s,wrote:%s} C={calls:%ld,input:%s,wrote:%s}",
-        copyACalls, FormatSeed(copyAInput).c_str(),
-        FormatSeed(copyAWritten).c_str(),
-        copyBCalls, FormatSeed(copyBInput).c_str(),
-        FormatSeed(copyBWritten).c_str(),
-        copyCCalls, FormatSeed(copyCInput).c_str(),
-        FormatSeed(copyCWritten).c_str());
-    D2RL::LogInfoF(Context,
-        "MapSeedSelector: Game+0x12C ingress={calls:%ld,input:%s,wrote:%s}",
-        gameSeedIngressCalls, FormatSeed(gameSeedIngressInput).c_str(),
-        FormatSeed(gameSeedIngressWritten).c_str());
-    const auto calls = InterlockedCompareExchange(&gDrlgSeedOverrideCalls,
-        0, 0);
-    if (calls == 0) {
-        Context->LogWarn(
-            "MapSeedSelector: the selected map seed did not reach the DRLG initializer before GameJoined.");
-        return;
-    }
-    const auto inputSeed = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&gDrlgSeedInput, 0, 0));
-    const auto inputState = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&gDrlgSeedInputState, 0, 0));
-    const auto writtenSeed = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&gDrlgSeedWritten, 0, 0));
-    const auto observedCalls = InterlockedCompareExchange(
-        &gDrlgSeedObservedCalls, 0, 0);
-    const auto observedStored = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&gDrlgSeedObservedStored, 0, 0));
-    const auto observedLcg = static_cast<std::uint32_t>(
-        InterlockedCompareExchange(&gDrlgSeedObservedLcg, 0, 0));
-    const auto expectedLcgState = static_cast<std::uint32_t>(
-        static_cast<std::uint64_t>(writtenSeed) * 0x6AC690C5ULL + 0x29AULL);
-    D2RL::LogInfoF(Context,
-        "MapSeedSelector: DRLG seed hook calls=%ld input={seed:%s,state:%s} wrote=%s expected_lcg=%s post_write={calls:%ld,stored:%s,lcg:%s} configured=%s",
-        calls, FormatSeed(inputSeed).c_str(), FormatSeed(inputState).c_str(),
-        FormatSeed(writtenSeed).c_str(), FormatSeed(expectedLcgState).c_str(),
-        observedCalls, FormatSeed(observedStored).c_str(),
-        FormatSeed(observedLcg).c_str(),
-        FormatSeed(Seeds[SelectedChoice - 1].value).c_str());
 }
 
 void GetPanelPosition(std::int32_t& x, std::int32_t& y) noexcept {
@@ -1258,8 +1160,9 @@ auto BuildLayoutChildren() -> std::string {
     result += R"json( },
         "states": [
 )json";
-    for (std::size_t index = 0; index < optionCount; ++index) {
-        if (index != 0) result += ",\n";
+    for (std::size_t visualRow = 0; visualRow < optionCount; ++visualRow) {
+        if (visualRow != 0) result += ",\n";
+        const auto index = ChoiceIndexForDropdownRow(visualRow);
         result += "          \"";
         result += EscapeJson(ChoiceLabel(index));
         result += "\"";
@@ -1380,6 +1283,7 @@ auto AddSeedEntry(std::string_view name, std::string_view seedText,
         }
 
         Seeds.push_back(std::move(pending));
+        PublishedSeedCount.store(Seeds.size(), std::memory_order_release);
         ConfigText = std::move(config);
         SelectedChoice = Seeds.size();
         ApplySelectedChoice();
@@ -1395,6 +1299,123 @@ auto AddSeedEntry(std::string_view name, std::string_view seedText,
         message = "The new seed could not be added.";
         return false;
     }
+}
+
+auto DeleteSeedEntry(std::size_t index,
+        std::string& message) noexcept -> bool {
+    message.clear();
+    if (Context == nullptr || !IsAvailable()) {
+        message = "The seed selector is unavailable.";
+        return false;
+    }
+    if (index >= Seeds.size()) {
+        message = "The selected seed no longer exists.";
+        return false;
+    }
+    try {
+        std::string config;
+        if (!ReadConfig(config)) {
+            message = "The plugin TOML could not be read.";
+            return false;
+        }
+
+        std::size_t cursor{};
+        std::size_t seedTableIndex{};
+        std::size_t removeStart = std::string::npos;
+        std::size_t removeEnd = config.size();
+        while (cursor < config.size()) {
+            const auto newline = config.find('\n', cursor);
+            const auto lineEnd = newline == std::string::npos
+                ? config.size() : newline;
+            const auto line = Trim(RemoveTomlComment(
+                std::string_view(config).substr(cursor, lineEnd - cursor)));
+            if (!line.empty() && line.front() == '[') {
+                if (removeStart != std::string::npos) {
+                    removeEnd = cursor;
+                    break;
+                }
+                if (line == "[[seeds]]") {
+                    if (seedTableIndex == index) removeStart = cursor;
+                    ++seedTableIndex;
+                }
+            }
+            if (newline == std::string::npos) break;
+            cursor = newline + 1;
+        }
+        if (removeStart == std::string::npos || removeEnd < removeStart) {
+            message = "The saved seed block could not be located in the plugin TOML.";
+            return false;
+        }
+
+        config.erase(removeStart, removeEnd - removeStart);
+        const auto removedChoice = index + 1;
+        std::size_t nextChoice = SelectedChoice;
+        std::string_view nextSelection{OffSelectionValue};
+        if (SelectedChoice != removedChoice) {
+            if (SelectedChoice > removedChoice) --nextChoice;
+            // Resolve the name before erasing: when an earlier row is deleted,
+            // the selected choice's array index shifts but its selection key
+            // remains the same.
+            if (SelectedChoice > 0 && SelectedChoice <= Seeds.size()) {
+                nextSelection = Seeds[SelectedChoice - 1].selectionKey;
+            } else {
+                nextChoice = 0;
+            }
+        } else {
+            nextChoice = 0;
+        }
+        if (!SetSelectedSeedLine(config, nextSelection)) {
+            message = "The selected seed setting could not be updated.";
+            return false;
+        }
+        if (!Context->WriteConfig(config.c_str())) {
+            message = "The saved seed could not be removed from the plugin TOML.";
+            return false;
+        }
+
+        const auto deletedName = Seeds[index].name;
+        Seeds.erase(Seeds.begin() + static_cast<std::ptrdiff_t>(index));
+        SelectedChoice = nextChoice;
+        PublishedSeedCount.store(Seeds.size(), std::memory_order_release);
+        ConfigText = std::move(config);
+        ApplySelectedChoice();
+        D2RL::LogInfoF(Context,
+            "MapSeedSelector: deleted saved seed name=%s",
+            deletedName.c_str());
+        message = "Saved seed deleted.";
+        return true;
+    } catch (...) {
+        message = "The saved seed could not be deleted.";
+        return false;
+    }
+}
+
+auto GetSeedEntryCount() noexcept -> std::size_t {
+    return PublishedSeedCount.load(std::memory_order_acquire);
+}
+
+auto GetSeedEntryLabel(std::size_t index, std::string& label) noexcept -> bool {
+    label.clear();
+    if (index >= Seeds.size()) return false;
+    try {
+        label = ChoiceLabel(index + 1);
+        return true;
+    } catch (...) {
+        label.clear();
+        return false;
+    }
+}
+
+auto IsDropdownExpandedAbove() noexcept -> bool {
+    return SeedExpandDirection == ExpandDirection::Above;
+}
+
+auto GetDropdownRowHeight() noexcept -> std::int32_t {
+    return OptionRowHeight;
+}
+
+auto GetDropdownControlHeight() noexcept -> std::int32_t {
+    return DropdownHeight;
 }
 
 void HandleDropdownChanged() noexcept {
@@ -1416,9 +1437,11 @@ void HandleDropdownChanged() noexcept {
             static_cast<unsigned>(result), choice);
         return;
     }
-    if (SelectedChoice == choice) return;
+    const auto selectedChoice = ChoiceIndexForDropdownRow(
+        static_cast<std::size_t>(choice));
+    if (SelectedChoice == selectedChoice) return;
 
-    SelectedChoice = static_cast<std::size_t>(choice);
+    SelectedChoice = selectedChoice;
     ApplySelectedChoice();
     if (!PersistSelection(SelectedSeedName())) {
         Context->LogWarn("MapSeedSelector: selected map seed is active for this session, but selected_seed could not be saved to TOML.");
@@ -1464,7 +1487,8 @@ void RefreshUi() noexcept {
         return;
     }
     const auto selectionResult = WidgetService->setDropdownSelection(Context,
-        handle, static_cast<std::uint32_t>(SelectedChoice));
+        handle, static_cast<std::uint32_t>(
+            DropdownRowForChoice(SelectedChoice)));
     const auto messageResult = WidgetService->setDropdownUpdateMessage(Context,
         handle, DropdownMessageTarget, DropdownMessageCommand);
     if (selectionResult != D2RL::Widgets::Result::Success

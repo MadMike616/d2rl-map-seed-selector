@@ -2,29 +2,10 @@ option casemap:none
 
 EXTERN gMapSeedOverrideActive:DWORD
 EXTERN gSelectedMapSeed:DWORD
-EXTERN gDrlgSeedOverrideCalls:DWORD
-EXTERN gDrlgSeedInput:DWORD
-EXTERN gDrlgSeedInputState:DWORD
-EXTERN gDrlgSeedWritten:DWORD
-EXTERN gDrlgSeedObservedCalls:DWORD
-EXTERN gDrlgSeedObservedStored:DWORD
-EXTERN gDrlgSeedObservedLcg:DWORD
-EXTERN gGameSeedIngressCalls:DWORD
-EXTERN gGameSeedIngressInput:DWORD
-EXTERN gGameSeedIngressWritten:DWORD
+EXTERN gMapSeedFlowState:DWORD
 EXTERN gLastObservedMapSeed:DWORD
 EXTERN gLastObservedMapSeedValid:DWORD
-EXTERN gSavedSeedCopyACalls:DWORD
-EXTERN gSavedSeedCopyAInput:DWORD
-EXTERN gSavedSeedCopyAWritten:DWORD
-EXTERN gSavedSeedCopyBCalls:DWORD
-EXTERN gSavedSeedCopyBInput:DWORD
-EXTERN gSavedSeedCopyBWritten:DWORD
-EXTERN gSavedSeedCopyCCalls:DWORD
-EXTERN gSavedSeedCopyCInput:DWORD
-EXTERN gSavedSeedCopyCWritten:DWORD
 EXTERN gOriginalDrlgSeedInitialization:QWORD
-EXTERN gOriginalDrlgSeedPostWrite:QWORD
 EXTERN gOriginalGameSeedIngress:QWORD
 EXTERN gOriginalSavedSeedCopyA:QWORD
 EXTERN gOriginalSavedSeedCopyB:QWORD
@@ -40,17 +21,36 @@ MapDrlgSeedInitializationHook PROC
     test r11d, r11d
     jz SeedInitializationUseOriginal
     mov eax, DWORD PTR [rdi]
-    mov DWORD PTR [gDrlgSeedInput], eax
-    mov eax, DWORD PTR [rdi+4]
-    mov DWORD PTR [gDrlgSeedInputState], eax
+    mov r11d, DWORD PTR [gMapSeedFlowState]
+    cmp r11d, 2
+    jne SeedInitializationCheckInjected
+    mov r11d, DWORD PTR [gSelectedMapSeed]
+    cmp eax, r11d
+    je SeedInitializationPassThrough
+    mov DWORD PTR [gMapSeedFlowState], 1
+    jmp SeedInitializationForce
+SeedInitializationCheckInjected:
+    cmp r11d, 1
+    je SeedInitializationForce
+    mov r11d, DWORD PTR [gSelectedMapSeed]
+    cmp eax, r11d
+    jne SeedInitializationMarkInjected
+    mov DWORD PTR [gMapSeedFlowState], 2
+    jmp SeedInitializationPassThrough
+SeedInitializationMarkInjected:
+    mov DWORD PTR [gMapSeedFlowState], 1
+SeedInitializationForce:
     mov ebx, DWORD PTR [gSelectedMapSeed]
-    mov DWORD PTR [gDrlgSeedWritten], ebx
     mov DWORD PTR [rdi], ebx
     mov DWORD PTR [rdi+4], 29Ah
     mov DWORD PTR [gLastObservedMapSeed], ebx
     mov r11d, 1
     xchg DWORD PTR [gLastObservedMapSeedValid], r11d
-    lock inc DWORD PTR [gDrlgSeedOverrideCalls]
+    jmp SeedInitializationContinue
+SeedInitializationPassThrough:
+    mov DWORD PTR [gLastObservedMapSeed], eax
+    mov r11d, 1
+    xchg DWORD PTR [gLastObservedMapSeedValid], r11d
     jmp SeedInitializationContinue
 SeedInitializationUseOriginal:
     mov r11d, DWORD PTR [rdi]
@@ -63,22 +63,6 @@ SeedInitializationContinue:
     jmp QWORD PTR [gOriginalDrlgSeedInitialization]
 MapDrlgSeedInitializationHook ENDP
 
-PUBLIC MapDrlgSeedPostWriteHook
-
-MapDrlgSeedPostWriteHook PROC
-    pushfq
-    mov eax, DWORD PTR [gMapSeedOverrideActive]
-    test eax, eax
-    jz SeedPostWriteUseOriginal
-    mov eax, DWORD PTR [rdi+840h]
-    mov DWORD PTR [gDrlgSeedObservedStored], eax
-    mov DWORD PTR [gDrlgSeedObservedLcg], r9d
-    lock inc DWORD PTR [gDrlgSeedObservedCalls]
-SeedPostWriteUseOriginal:
-    popfq
-    jmp QWORD PTR [gOriginalDrlgSeedPostWrite]
-MapDrlgSeedPostWriteHook ENDP
-
 PUBLIC MapGameSeedIngressHook
 
 MapGameSeedIngressHook PROC
@@ -86,16 +70,28 @@ MapGameSeedIngressHook PROC
     push r10
     push r11
     mov r10d, DWORD PTR [rdi+12Ch]
-    mov DWORD PTR [gGameSeedIngressInput], r10d
-    lock inc DWORD PTR [gGameSeedIngressCalls]
     mov r11d, DWORD PTR [gMapSeedOverrideActive]
     test r11d, r11d
     jz GameSeedIngressRecordWritten
+    mov r11d, DWORD PTR [gMapSeedFlowState]
+    test r11d, r11d
+    jnz GameSeedIngressCheckValue
+    mov r11d, DWORD PTR [gSelectedMapSeed]
+    cmp r10d, r11d
+    jne GameSeedIngressMarkInjected
+    mov DWORD PTR [gMapSeedFlowState], 2
+    jmp GameSeedIngressCheckValue
+GameSeedIngressMarkInjected:
+    mov DWORD PTR [gMapSeedFlowState], 1
+GameSeedIngressCheckValue:
+    mov r11d, DWORD PTR [gSelectedMapSeed]
+    cmp r10d, r11d
+    je GameSeedIngressRecordWritten
+    mov DWORD PTR [gMapSeedFlowState], 1
     mov r11d, DWORD PTR [gSelectedMapSeed]
     mov DWORD PTR [rdi+12Ch], r11d
     mov r10d, r11d
 GameSeedIngressRecordWritten:
-    mov DWORD PTR [gGameSeedIngressWritten], r10d
     pop r11
     pop r10
     popfq
@@ -109,15 +105,18 @@ MapSavedSeedCopyAHook PROC
     push r10
     push r11
     mov r10d, eax
-    mov DWORD PTR [gSavedSeedCopyAInput], r10d
-    lock inc DWORD PTR [gSavedSeedCopyACalls]
     mov r11d, DWORD PTR [gMapSeedOverrideActive]
     test r11d, r11d
     jz SavedSeedCopyARecordWritten
+    mov r11d, DWORD PTR [gSelectedMapSeed]
+    cmp r10d, r11d
+    je SavedSeedCopyAMatchesSaved
+    mov DWORD PTR [gMapSeedFlowState], 1
     mov eax, DWORD PTR [gSelectedMapSeed]
+    jmp SavedSeedCopyARecordWritten
+SavedSeedCopyAMatchesSaved:
+    mov DWORD PTR [gMapSeedFlowState], 2
 SavedSeedCopyARecordWritten:
-    mov r10d, eax
-    mov DWORD PTR [gSavedSeedCopyAWritten], r10d
     pop r11
     pop r10
     popfq
@@ -131,15 +130,18 @@ MapSavedSeedCopyBHook PROC
     push r10
     push r11
     mov r10d, eax
-    mov DWORD PTR [gSavedSeedCopyBInput], r10d
-    lock inc DWORD PTR [gSavedSeedCopyBCalls]
     mov r11d, DWORD PTR [gMapSeedOverrideActive]
     test r11d, r11d
     jz SavedSeedCopyBRecordWritten
+    mov r11d, DWORD PTR [gSelectedMapSeed]
+    cmp r10d, r11d
+    je SavedSeedCopyBMatchesSaved
+    mov DWORD PTR [gMapSeedFlowState], 1
     mov eax, DWORD PTR [gSelectedMapSeed]
+    jmp SavedSeedCopyBRecordWritten
+SavedSeedCopyBMatchesSaved:
+    mov DWORD PTR [gMapSeedFlowState], 2
 SavedSeedCopyBRecordWritten:
-    mov r10d, eax
-    mov DWORD PTR [gSavedSeedCopyBWritten], r10d
     pop r11
     pop r10
     popfq
@@ -153,15 +155,18 @@ MapSavedSeedCopyCHook PROC
     push r10
     push r11
     mov r10d, eax
-    mov DWORD PTR [gSavedSeedCopyCInput], r10d
-    lock inc DWORD PTR [gSavedSeedCopyCCalls]
     mov r11d, DWORD PTR [gMapSeedOverrideActive]
     test r11d, r11d
     jz SavedSeedCopyCRecordWritten
+    mov r11d, DWORD PTR [gSelectedMapSeed]
+    cmp r10d, r11d
+    je SavedSeedCopyCMatchesSaved
+    mov DWORD PTR [gMapSeedFlowState], 1
     mov eax, DWORD PTR [gSelectedMapSeed]
+    jmp SavedSeedCopyCRecordWritten
+SavedSeedCopyCMatchesSaved:
+    mov DWORD PTR [gMapSeedFlowState], 2
 SavedSeedCopyCRecordWritten:
-    mov r10d, eax
-    mov DWORD PTR [gSavedSeedCopyCWritten], r10d
     pop r11
     pop r10
     popfq

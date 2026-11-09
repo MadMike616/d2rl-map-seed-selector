@@ -28,9 +28,13 @@ namespace {
 
 constexpr std::size_t SelectorPanelSlotCount = 17;
 constexpr std::size_t KeptClosedSelectorPanels = 8;
-// The loader limits each plugin to 64 panels. The selector and auxiliary UI
-// use 36, leaving 28 rotating Add Seed views while text changes.
-constexpr std::size_t AddSeedDialogSlotCount = 28;
+// The loader limits each plugin to 64 panels. In the legacy dropdown fallback,
+// the selector pool uses two panels per slot, and the Add Seed button, current
+// seed panel, and delete prompt use three more. Reserve the remaining slots for
+// Add Seed views that D2R may keep cached after their text changes.
+constexpr std::size_t AddSeedDialogSlotCount = 27;
+static_assert(SelectorPanelSlotCount * 2 + AddSeedDialogSlotCount + 3 <= 64,
+    "Map Seed Selector exceeds D2RLoader's per-plugin panel limit");
 constexpr auto PanelUnloadCooldown = std::chrono::milliseconds(1500);
 struct SelectorPanelCacheEntry {
     bool loaded{};
@@ -56,6 +60,8 @@ constexpr char CancelAddSeedMessage[] = "map-seed-selector/CancelAddSeed";
 constexpr char ShowAddSeedHelpMessage[] = "map-seed-selector/ShowAddSeedHelp";
 constexpr char CopyCurrentSeedMessage[] = "map-seed-selector/CopyCurrentSeed";
 constexpr char CloseCurrentSeedMessage[] = "map-seed-selector/CloseCurrentSeed";
+constexpr char ConfirmDeleteSeedMessage[] = "map-seed-selector/DeleteSeedConfirm";
+constexpr char CancelDeleteSeedMessage[] = "map-seed-selector/DeleteSeedCancel";
 constexpr char FocusSeedNameMessage[] = "map-seed-selector/FocusSeedName";
 constexpr char FocusSeedValueMessage[] = "map-seed-selector/FocusSeedValue";
 constexpr char ChoiceMessagePrefix[] = "map-seed-selector/Choose_";
@@ -70,6 +76,11 @@ constexpr char QualifiedCurrentSeedPanelName[] =
     "map-seed-selector/CurrentSeed";
 constexpr char CurrentSeedPanelLayoutResourcePath[] =
     "data/global/ui/layouts/map-seed-selector/CurrentSeedhd.json";
+constexpr char DeleteSeedDialogLocalId[] = "ConfirmDeleteSeed";
+constexpr char QualifiedDeleteSeedDialogName[] =
+    "map-seed-selector/ConfirmDeleteSeed";
+constexpr char DeleteSeedDialogLayoutResourcePath[] =
+    "data/global/ui/layouts/map-seed-selector/ConfirmDeleteSeedhd.json";
 constexpr char AddSeedButtonSpriteResourcePath[] =
     "data/hd/global/ui/d2rloader/map-seed-selector/addseedbutton.sprite";
 constexpr char AddSeedButtonLowEndSpriteResourcePath[] =
@@ -104,6 +115,10 @@ constexpr char OptionTileSpriteLowEndResourcePath[] =
     "data/hd/global/ui/d2rloader/map-seed-selector/optiontile.lowend.sprite";
 constexpr std::int32_t PopupCanvasWidth = 8192;
 constexpr std::int32_t PopupCanvasHeight = 4320;
+// D2R HD menu layout coordinates use a 2160-unit reference screen height.
+// PopupCanvas* only sizes the transparent overlay; it is not the coordinate
+// system used by WidgetService::getWidgetRect.
+constexpr float D2RUiReferenceHeight = 2160.0F;
 constexpr char LayoutTemplate[] = R"json({
   "type": "Panel",
   "name": "@panel_name@",
@@ -213,7 +228,7 @@ constexpr D2RL::PluginInfo Info{
     .abiVersion = D2RL_PLUGIN_ABI_VERSION,
     .id = "map-seed-selector",
     .name = "Map Seed Selector",
-    .version = "0.1.53",
+    .version = "0.1.54",
     .author = "MadMike",
     .description = "Selects configured offline map seeds on the character screen.",
     .flags = D2RL::PluginFlags::Client | D2RL::PluginFlags::NativeHooks,
@@ -253,6 +268,10 @@ D2RL::Resources::RegistrationHandle CurrentSeedPanelLayoutHandle{D2RL::Resources
 D2RL::Panels::RegistrationHandle CurrentSeedPanelHandle{D2RL::Panels::InvalidHandle};
 std::string CurrentSeedPanelLayoutJson{};
 std::atomic_bool CurrentSeedPanelLayoutLoaded{};
+D2RL::Resources::RegistrationHandle DeleteSeedDialogLayoutHandle{D2RL::Resources::InvalidHandle};
+D2RL::Panels::RegistrationHandle DeleteSeedDialogPanelHandle{D2RL::Panels::InvalidHandle};
+std::string DeleteSeedDialogLayoutJson{};
+std::atomic_bool DeleteSeedDialogLayoutLoaded{};
 std::array<D2RL::Resources::RegistrationHandle, SelectorPanelSlotCount>
     SelectorLayoutHandles{};
 std::array<D2RL::Resources::RegistrationHandle, SelectorPanelSlotCount>
@@ -299,6 +318,10 @@ std::atomic_bool AddSeedDialogOpen{};
 std::atomic_int AddSeedFocusedField{};
 std::atomic_bool AddSeedTypingEnabled{};
 std::atomic_bool CurrentSeedPanelOpen{};
+std::atomic_bool DeleteSeedDialogOpen{};
+std::atomic<std::size_t> PendingDeleteSeedIndex{static_cast<std::size_t>(-1)};
+std::atomic<LONG> PendingDeletePointX{};
+std::atomic<LONG> PendingDeletePointY{};
 std::atomic_bool AddSeedTextChanged{};
 std::atomic_bool AddSeedTextRefreshPending{};
 std::array<std::uint8_t, 44> BlankSpriteBytes{};
@@ -309,6 +332,13 @@ std::atomic_bool DesiredPanelOpen{};
 std::atomic_bool OnlineFlowActive{};
 std::atomic_bool PanelSyncPending{};
 std::atomic_bool DropdownSyncPending{};
+std::atomic_bool DropdownExpanded{};
+std::atomic_bool DropdownScreenRectValid{};
+std::atomic<float> DropdownScreenRectX{};
+std::atomic<float> DropdownScreenRectY{};
+std::atomic<float> DropdownScreenRectWidth{};
+std::atomic<float> DropdownScreenRectHeight{};
+std::atomic_bool LegacyScreenRectMappingLogged{};
 std::atomic_bool PickerActionPending{};
 std::atomic_int PendingPickerAction{-1};
 std::atomic_bool UiRefreshPending{};
@@ -321,6 +351,8 @@ void SchedulePickerAction(int action) noexcept;
 void ScheduleAddSeedAction(int action) noexcept;
 void ScheduleAddSeedTextRefresh() noexcept;
 void CloseCurrentSeedPanel(const D2RL::PluginContext* context) noexcept;
+void CloseDeleteSeedDialog(const D2RL::PluginContext* context) noexcept;
+void CacheSeedDropdownScreenRect(const D2RL::PluginContext* context) noexcept;
 void StopAddSeedKeyboard() noexcept;
 auto StartAddSeedKeyboard() noexcept -> bool;
 auto RefreshAddSeedDialog(const D2RL::PluginContext* context) noexcept
@@ -591,6 +623,8 @@ void __cdecl ApplyDropdownChanged(const D2RL::PluginContext* context,
         return;
     }
     DropdownSyncPending.store(false, std::memory_order_release);
+    DropdownExpanded.store(false, std::memory_order_release);
+    CacheSeedDropdownScreenRect(context);
     MapSeedSelector::HandleDropdownChanged();
 }
 
@@ -642,6 +676,8 @@ void __cdecl ApplyPickerAction(const D2RL::PluginContext* context,
                     == D2RL::Panels::PresentationState::Open) {
                 if (PanelService->closePanel(context, OptionsPanelHandle)
                         == D2RL::Panels::Result::Success) {
+                    DropdownExpanded.store(false,
+                        std::memory_order_release);
                     MarkSelectorPanelClosed(ActivePanelSlot, true);
                 }
             } else {
@@ -652,11 +688,15 @@ void __cdecl ApplyPickerAction(const D2RL::PluginContext* context,
                         "MapSeedSelector: popup could not be opened (result=%u).",
                         static_cast<unsigned>(openResult));
                 } else {
+                    DropdownExpanded.store(true,
+                        std::memory_order_release);
                     MarkSelectorPanelOpened(ActivePanelSlot, true);
+                    CacheSeedDropdownScreenRect(context);
                 }
             }
         }
     } else if (action > 0) {
+        DropdownExpanded.store(false, std::memory_order_release);
         MapSeedSelector::SelectChoice(static_cast<std::size_t>(action - 1));
         if (OptionsPanelHandle != D2RL::Panels::InvalidHandle) {
             if (PanelService->closePanel(context, OptionsPanelHandle)
@@ -703,12 +743,16 @@ constexpr UINT AddSeedShutdownMessage = WM_APP + 75;
 
 HWND AddSeedEdit{};
 HHOOK AddSeedKeyboardHook{};
+HHOOK AddSeedMouseHook{};
 HANDLE AddSeedKeyboardThread{};
 std::atomic<DWORD> AddSeedKeyboardThreadId{};
 std::atomic_bool AddSeedKeyboardReady{};
 std::atomic_bool AddSeedKeyboardFailed{};
+std::atomic_bool AddSeedMouseFailed{};
 std::array<bool, 256> AddSeedForwardedKeys{};
 std::array<bool, 256> AddSeedConsumedKeys{};
+LRESULT CALLBACK AddSeedMouseProc(int code, WPARAM message,
+    LPARAM parameter);
 
 auto JsonEscape(std::string_view value) -> std::string {
     static constexpr char hex[] = "0123456789ABCDEF";
@@ -753,6 +797,61 @@ auto WideToUtf8(std::wstring_view value) -> std::string {
 
 auto DialogLocalId(std::size_t slot) -> std::string {
     return "AddSeedDialog" + std::to_string(slot);
+}
+
+auto BuildDeleteSeedDialogLayout(std::string_view seedName) -> std::string {
+    std::string layout = R"json({
+  "type": "Panel",
+  "name": "map-seed-selector/ConfirmDeleteSeed",
+  "fields": { "priority": 9011, "anchor": { "x": 0.0, "y": 0.0 },
+    "rect": { "x": 0, "y": 0, "width": 8192, "height": 4320 } },
+  "children": [{
+    "type": "ImageWidget", "name": "Frame",
+    "fields": { "rect": { "x": @frame_x@, "y": @frame_y@, "width": 473, "height": 227 }, "filename": "d2rloader\\map-seed-selector\\currentseedpanel" },
+    "children": [
+      { "type": "TextBoxWidget", "name": "Title", "fields": {
+        "rect": { "x": 18, "y": 10, "width": 440, "height": 42 },
+        "text": "Delete Saved Seed", "style": { "fontColor": "$FontColorGoldYellow", "pointSize": "$MediumFontSize", "dropShadow": "$DefaultDropShadow" } } },
+      { "type": "TextBoxWidget", "name": "SeedName", "fields": {
+        "rect": { "x": 18, "y": 64, "width": 440, "height": 36 },
+        "text": "@seed_name@", "style": { "fontColor": "$FontColorWhite", "pointSize": "$MediumFontSize", "dropShadow": "$DefaultDropShadow", "alignment": { "h": "center", "v": "center" } } } },
+      { "type": "ButtonWidget", "name": "ConfirmDelete", "fields": {
+        "rect": { "x": 87, "y": 160, "width": 133, "height": 49 },
+        "filename": "d2rloader\\map-seed-selector\\currentseedpanelbutton", "focusIndicatorFilename": "Controller/HoverImages/ModalButton_Hover",
+        "pressedFrame": 1, "disabledFrame": 2, "hoveredFrame": 3, "textString": "Delete", "pointSize": 22, "textColor": "$FontColorWhite",
+        "onClickMessage": "PanelManager:ClosePanel:map-seed-selector/DeleteSeedConfirm" } },
+      { "type": "ButtonWidget", "name": "CancelDelete", "fields": {
+        "rect": { "x": 257, "y": 160, "width": 133, "height": 49 },
+        "filename": "d2rloader\\map-seed-selector\\currentseedpanelbutton", "focusIndicatorFilename": "Controller/HoverImages/ModalButton_Hover",
+        "pressedFrame": 1, "disabledFrame": 2, "hoveredFrame": 3, "textString": "Cancel", "pointSize": 22, "textColor": "$FontColorWhite",
+        "onClickMessage": "PanelManager:ClosePanel:map-seed-selector/DeleteSeedCancel" } }
+    ]
+  }]
+})json";
+    std::int32_t panelX{};
+    std::int32_t panelY{};
+    MapSeedSelector::GetPanelPosition(panelX, panelY);
+    const std::string frameX = std::to_string(panelX + 56);
+    constexpr std::int32_t DeleteDialogHeight = 227;
+    constexpr std::int32_t DropdownHeight = 56;
+    const auto frameY = MapSeedSelector::IsDropdownExpandedAbove()
+        ? panelY - DeleteDialogHeight
+        : panelY + DropdownHeight;
+    const std::string frameYText = std::to_string(frameY);
+    const auto replace = [&layout](std::string_view token,
+            std::string_view value) {
+        std::size_t position{};
+        while ((position = layout.find(token, position))
+                != std::string::npos) {
+            layout.replace(position, token.size(), value);
+            position += value.size();
+        }
+    };
+    replace("@frame_x@", frameX);
+    replace("@frame_y@", frameYText);
+    const std::string escapedName = JsonEscape(seedName);
+    replace("@seed_name@", escapedName);
+    return layout;
 }
 
 auto BuildAddSeedDialogLayout(std::size_t slot, std::string_view name,
@@ -1067,12 +1166,335 @@ void CloseCurrentSeedPanel(const D2RL::PluginContext* context) noexcept {
     }
 }
 
+auto UnloadDeleteSeedDialogLayout(
+        const D2RL::PluginContext* context) noexcept -> bool {
+    if (!DeleteSeedDialogLayoutLoaded.load(std::memory_order_acquire)) return true;
+    if (context == nullptr || context != Context || WidgetService == nullptr
+            || WidgetService->dispatchUiAction == nullptr) {
+        return false;
+    }
+    const D2RL::Widgets::UiAction unload{
+        .structSize = D2RL::Widgets::UiActionSize,
+        .flags = 0,
+        .target = "PanelManager",
+        .command = "UnloadPanel",
+        .text = QualifiedDeleteSeedDialogName,
+    };
+    const auto result = WidgetService->dispatchUiAction(context, &unload);
+    if (result != D2RL::Widgets::Result::Success) {
+        D2RL::LogWarnF(context,
+            "MapSeedSelector: delete confirmation layout could not be unloaded (result=%u).",
+            static_cast<unsigned>(result));
+        return false;
+    }
+    DeleteSeedDialogLayoutLoaded.store(false, std::memory_order_release);
+    return true;
+}
+
+auto RefreshDeleteSeedDialogLayout(const D2RL::PluginContext* context,
+        std::string_view seedName) noexcept -> bool {
+    if (context == nullptr || context != Context || ResourceService == nullptr
+            || ResourceService->registerResource == nullptr
+            || ResourceService->unregisterResource == nullptr
+            || !UnloadDeleteSeedDialogLayout(context)) {
+        return false;
+    }
+    if (DeleteSeedDialogLayoutHandle != D2RL::Resources::InvalidHandle) {
+        const auto result = ResourceService->unregisterResource(context,
+            DeleteSeedDialogLayoutHandle);
+        if (result != D2RL::Resources::Result::Success) {
+            D2RL::LogWarnF(context,
+                "MapSeedSelector: delete confirmation layout could not be refreshed (result=%u).",
+                static_cast<unsigned>(result));
+            return false;
+        }
+        DeleteSeedDialogLayoutHandle = D2RL::Resources::InvalidHandle;
+    }
+    DeleteSeedDialogLayoutJson = BuildDeleteSeedDialogLayout(seedName);
+    const D2RL::Resources::ResourceRegistration layout{
+        .structSize = D2RL::Resources::ResourceRegistrationSize,
+        .flags = 0,
+        .path = DeleteSeedDialogLayoutResourcePath,
+        .bytes = DeleteSeedDialogLayoutJson.data(),
+        .byteCount = DeleteSeedDialogLayoutJson.size(),
+    };
+    const auto result = ResourceService->registerResource(context, &layout,
+        &DeleteSeedDialogLayoutHandle);
+    if (result != D2RL::Resources::Result::Success
+            || DeleteSeedDialogLayoutHandle
+                == D2RL::Resources::InvalidHandle) {
+        D2RL::LogWarnF(context,
+            "MapSeedSelector: delete confirmation layout could not be registered (result=%u).",
+            static_cast<unsigned>(result));
+        return false;
+    }
+    return true;
+}
+
+void CloseDeleteSeedDialog(const D2RL::PluginContext* context) noexcept {
+    if (context != nullptr && context == Context && PanelService != nullptr
+            && DeleteSeedDialogPanelHandle
+                != D2RL::Panels::InvalidHandle) {
+        (void)PanelService->closePanel(context,
+            DeleteSeedDialogPanelHandle);
+    }
+    DeleteSeedDialogOpen.store(false, std::memory_order_release);
+}
+
+void OpenDeleteSeedDialog(const D2RL::PluginContext* context,
+        std::size_t seedIndex) noexcept {
+    if (context == nullptr || context != Context
+            || !DesiredPanelOpen.load(std::memory_order_acquire)
+            || AddSeedDialogOpen.load(std::memory_order_acquire)
+            || CurrentSeedPanelOpen.load(std::memory_order_acquire)
+            || DeleteSeedDialogPanelHandle
+                == D2RL::Panels::InvalidHandle
+            || PanelService == nullptr) {
+        return;
+    }
+    std::string seedLabel;
+    if (!MapSeedSelector::GetSeedEntryLabel(seedIndex, seedLabel)) {
+        context->LogWarn("MapSeedSelector: right-clicked seed is no longer in the list.");
+        return;
+    }
+    if (!RefreshDeleteSeedDialogLayout(context, seedLabel)) {
+        context->LogWarn("MapSeedSelector: delete confirmation dialog could not be prepared.");
+        return;
+    }
+    if (OptionsPanelHandle != D2RL::Panels::InvalidHandle) {
+        (void)PanelService->closePanel(context, OptionsPanelHandle);
+        MarkSelectorPanelClosed(ActivePanelSlot, true);
+    }
+    PendingDeleteSeedIndex.store(seedIndex, std::memory_order_release);
+    DropdownExpanded.store(false, std::memory_order_release);
+    const auto result = PanelService->openPanel(context,
+        DeleteSeedDialogPanelHandle);
+    if (result != D2RL::Panels::Result::Success) {
+        PendingDeleteSeedIndex.store(static_cast<std::size_t>(-1),
+            std::memory_order_release);
+        D2RL::LogWarnF(context,
+            "MapSeedSelector: delete confirmation dialog could not be opened (result=%u).",
+            static_cast<unsigned>(result));
+        return;
+    }
+    DeleteSeedDialogOpen.store(true, std::memory_order_release);
+    DeleteSeedDialogLayoutLoaded.store(true, std::memory_order_release);
+}
+
+void CacheSeedDropdownScreenRect(
+        const D2RL::PluginContext* context) noexcept {
+    DropdownScreenRectValid.store(false, std::memory_order_release);
+    if (context == nullptr || context != Context || WidgetService == nullptr
+            || WidgetService->findPanel == nullptr
+            || WidgetService->findWidget == nullptr) {
+        return;
+    }
+    D2RL::Widgets::WidgetHandle panel{};
+    D2RL::Widgets::WidgetHandle dropdown{};
+    if (WidgetService->findPanel(context, QualifiedPanelName.c_str(), &panel)
+                != D2RL::Widgets::Result::Success
+            || WidgetService->findWidget(context, panel, "SeedDropdown",
+                &dropdown) != D2RL::Widgets::Result::Success) {
+        return;
+    }
+    const auto publishRect = [](float x, float y, float width,
+            float height) noexcept {
+        if (width <= 0.0F || height <= 0.0F) return false;
+        DropdownScreenRectX.store(x, std::memory_order_relaxed);
+        DropdownScreenRectY.store(y, std::memory_order_relaxed);
+        DropdownScreenRectWidth.store(width, std::memory_order_relaxed);
+        DropdownScreenRectHeight.store(height, std::memory_order_relaxed);
+        DropdownScreenRectValid.store(true, std::memory_order_release);
+        return true;
+    };
+
+    if (D2RL::HasWidgetServiceField(WidgetService,
+                D2RL::WidgetServiceGetWidgetScreenRectFieldEnd)
+            && WidgetService->getWidgetScreenRect != nullptr) {
+        D2RL::Widgets::ScreenRect screenRect{};
+        if (WidgetService->getWidgetScreenRect(context, dropdown,
+                    &screenRect) == D2RL::Widgets::Result::Success
+                && publishRect(screenRect.x, screenRect.y,
+                    screenRect.width, screenRect.height)) {
+            return;
+        }
+    }
+
+    // Older D2RLoader builds expose getWidgetRect but not
+    // getWidgetScreenRect. Convert the selector's layout coordinates to the
+    // game window's client pixels so right-click hit testing still works.
+    constexpr auto getWidgetRectFieldEnd = static_cast<std::uint32_t>(
+        offsetof(D2RL::WidgetService, getWidgetRect)
+        + sizeof(D2RL::Widgets::GetWidgetRectFn));
+    if (!D2RL::HasWidgetServiceField(WidgetService,
+                getWidgetRectFieldEnd)
+            || WidgetService->getWidgetRect == nullptr) {
+        return;
+    }
+    D2RL::Widgets::Rect localRect{};
+    if (WidgetService->getWidgetRect(context, dropdown, &localRect)
+            != D2RL::Widgets::Result::Success
+            || localRect.width <= 0 || localRect.height <= 0) {
+        return;
+    }
+
+    const HWND window = GetForegroundWindow();
+    DWORD processId{};
+    if (window == nullptr
+            || GetWindowThreadProcessId(window, &processId) == 0
+            || processId != GetCurrentProcessId()) {
+        return;
+    }
+    RECT clientRect{};
+    POINT clientOrigin{};
+    if (!GetClientRect(window, &clientRect)
+            || !ClientToScreen(window, &clientOrigin)) {
+        return;
+    }
+    const auto clientHeight = clientRect.bottom - clientRect.top;
+    if (clientHeight <= 0) return;
+
+    std::int32_t panelX{};
+    std::int32_t panelY{};
+    MapSeedSelector::GetPanelPosition(panelX, panelY);
+    const float uiScale = static_cast<float>(clientHeight)
+        / D2RUiReferenceHeight;
+    const float screenX = static_cast<float>(clientOrigin.x)
+        + static_cast<float>(panelX + localRect.x) * uiScale;
+    const float screenY = static_cast<float>(clientOrigin.y)
+        + static_cast<float>(panelY + localRect.y) * uiScale;
+    const float screenWidth = static_cast<float>(localRect.width) * uiScale;
+    const float screenHeight = static_cast<float>(localRect.height) * uiScale;
+    if (!publishRect(screenX, screenY, screenWidth, screenHeight)) return;
+
+    if (!LegacyScreenRectMappingLogged.exchange(true,
+            std::memory_order_acq_rel)) {
+        D2RL::LogInfoF(context,
+            "MapSeedSelector: using legacy dropdown hit-test mapping (layout=%d,%d %dx%d; client=%ldx%ld; scale=%.4f; screen=%.1f,%.1f %.1fx%.1f).",
+            panelX + localRect.x, panelY + localRect.y,
+            localRect.width, localRect.height,
+            static_cast<long>(clientRect.right - clientRect.left),
+            static_cast<long>(clientHeight), uiScale,
+            screenX, screenY, screenWidth, screenHeight);
+    }
+}
+
+auto DropdownEntryAtScreenPoint(LONG x, LONG y,
+        std::size_t& seedIndex) noexcept -> bool {
+    seedIndex = static_cast<std::size_t>(-1);
+    if (!DropdownScreenRectValid.load(std::memory_order_acquire)) return false;
+    const auto rectX = DropdownScreenRectX.load(std::memory_order_relaxed);
+    const auto rectY = DropdownScreenRectY.load(std::memory_order_relaxed);
+    const auto rectWidth = DropdownScreenRectWidth.load(std::memory_order_relaxed);
+    const auto rectHeight = DropdownScreenRectHeight.load(std::memory_order_relaxed);
+    const auto optionCount = MapSeedSelector::GetSeedEntryCount() + 1;
+    if (optionCount == 0 || rectWidth <= 0.0F || rectHeight <= 0.0F) {
+        return false;
+    }
+    const float rowHeight = rectHeight
+        * static_cast<float>(MapSeedSelector::GetDropdownRowHeight())
+        / static_cast<float>(MapSeedSelector::GetDropdownControlHeight());
+    if (rowHeight <= 0.0F) return false;
+    const float listTop = MapSeedSelector::IsDropdownExpandedAbove()
+        ? rectY - rowHeight * static_cast<float>(optionCount)
+        : rectY + rectHeight;
+    const float pointX = static_cast<float>(x);
+    const float pointY = static_cast<float>(y);
+    const float rowOffset = pointY - listTop;
+    if (pointX < rectX || pointX >= rectX + rectWidth
+            || rowOffset < 0.0F
+            || rowOffset >= rowHeight * static_cast<float>(optionCount)) {
+        return false;
+    }
+    const auto visualRow = static_cast<std::size_t>(rowOffset / rowHeight);
+    const auto optionIndex = MapSeedSelector::IsDropdownExpandedAbove()
+        ? optionCount - 1 - visualRow : visualRow;
+    if (optionIndex > 0 && optionIndex <= MapSeedSelector::GetSeedEntryCount()) {
+        seedIndex = optionIndex - 1;
+    }
+    return true;
+}
+
 auto AddSeedGameIsForeground() noexcept -> bool {
     const HWND foreground = GetForegroundWindow();
     DWORD processId{};
     return foreground != nullptr
         && GetWindowThreadProcessId(foreground, &processId) != 0
         && processId == GetCurrentProcessId();
+}
+
+LRESULT CALLBACK AddSeedMouseProc(int code, WPARAM message,
+        LPARAM parameter) {
+    if (code < 0 || parameter == 0 || !Operational.load(
+            std::memory_order_acquire)
+            || !DesiredPanelOpen.load(std::memory_order_acquire)
+            || !AddSeedGameIsForeground()) {
+        return CallNextHookEx(AddSeedMouseHook, code, message, parameter);
+    }
+    const auto* mouse = reinterpret_cast<const MSLLHOOKSTRUCT*>(parameter);
+    if (message == WM_LBUTTONDOWN) {
+        if (!AddSeedDialogOpen.load(std::memory_order_acquire)
+                && !CurrentSeedPanelOpen.load(std::memory_order_acquire)
+                && !DeleteSeedDialogOpen.load(std::memory_order_acquire)) {
+            const bool wasExpanded = DropdownExpanded.load(
+                std::memory_order_acquire);
+            const float rectX = DropdownScreenRectX.load(
+                std::memory_order_relaxed);
+            const float rectY = DropdownScreenRectY.load(
+                std::memory_order_relaxed);
+            const float rectWidth = DropdownScreenRectWidth.load(
+                std::memory_order_relaxed);
+            const float rectHeight = DropdownScreenRectHeight.load(
+                std::memory_order_relaxed);
+            const float pointX = static_cast<float>(mouse->pt.x);
+            const float pointY = static_cast<float>(mouse->pt.y);
+            const bool onControl = DropdownScreenRectValid.load(
+                    std::memory_order_acquire)
+                && pointX >= rectX && pointX < rectX + rectWidth
+                && pointY >= rectY && pointY < rectY + rectHeight;
+            if (NativeDropdownAvailable && onControl) {
+                DropdownExpanded.store(!wasExpanded,
+                    std::memory_order_release);
+                if (!wasExpanded) ScheduleAddSeedAction(11);
+            } else if (wasExpanded) {
+                // A selection or outside click closes either dropdown.
+                DropdownExpanded.store(false, std::memory_order_release);
+            }
+        }
+        return CallNextHookEx(AddSeedMouseHook, code, message, parameter);
+    }
+    if (message == WM_RBUTTONDOWN
+            && DropdownExpanded.load(std::memory_order_acquire)
+            && !AddSeedDialogOpen.load(std::memory_order_acquire)
+            && !CurrentSeedPanelOpen.load(std::memory_order_acquire)
+            && !DeleteSeedDialogOpen.load(std::memory_order_acquire)) {
+        std::size_t seedIndex{};
+        if (DropdownEntryAtScreenPoint(mouse->pt.x, mouse->pt.y,
+                seedIndex)) {
+            return 1;
+        }
+    }
+    if (message == WM_RBUTTONUP
+            && DropdownExpanded.load(std::memory_order_acquire)
+            && !AddSeedDialogOpen.load(std::memory_order_acquire)
+            && !CurrentSeedPanelOpen.load(std::memory_order_acquire)
+            && !DeleteSeedDialogOpen.load(std::memory_order_acquire)) {
+        std::size_t seedIndex{};
+        if (DropdownEntryAtScreenPoint(mouse->pt.x, mouse->pt.y,
+                seedIndex)) {
+            if (seedIndex != static_cast<std::size_t>(-1)) {
+                PendingDeletePointX.store(mouse->pt.x,
+                    std::memory_order_relaxed);
+                PendingDeletePointY.store(mouse->pt.y,
+                    std::memory_order_relaxed);
+                ScheduleAddSeedAction(8);
+            }
+            // Consume right-clicks over dropdown rows, including Off, so the
+            // game cannot interpret them as another character-select action.
+            return 1;
+        }
+    }
+    return CallNextHookEx(AddSeedMouseHook, code, message, parameter);
 }
 
 LRESULT CALLBACK AddSeedKeyboardProc(int code, WPARAM message,
@@ -1107,11 +1529,21 @@ LRESULT CALLBACK AddSeedKeyboardProc(int code, WPARAM message,
         return CallNextHookEx(AddSeedKeyboardHook, code, message, parameter);
     }
     if (AddSeedConsumedKeys[virtualKey]) return 1;
+    if (DeleteSeedDialogOpen.load(std::memory_order_acquire)
+            && AddSeedGameIsForeground()) {
+        AddSeedConsumedKeys[virtualKey] = true;
+        if (key->vkCode == VK_ESCAPE) ScheduleAddSeedAction(10);
+        return 1;
+    }
     if (CurrentSeedPanelOpen.load(std::memory_order_acquire)
             && AddSeedGameIsForeground()) {
         AddSeedConsumedKeys[virtualKey] = true;
         if (key->vkCode == VK_ESCAPE) ScheduleAddSeedAction(7);
         return 1;
+    }
+    if (DropdownExpanded.load(std::memory_order_acquire)
+            && key->vkCode == VK_ESCAPE && AddSeedGameIsForeground()) {
+        DropdownExpanded.store(false, std::memory_order_release);
     }
     if (!AddSeedTypingEnabled.load(std::memory_order_acquire)
             || !AddSeedDialogOpen.load(std::memory_order_acquire)
@@ -1216,6 +1648,10 @@ DWORD WINAPI AddSeedKeyboardMain(void*) {
     if (AddSeedEdit != nullptr) SetFocus(AddSeedEdit);
     AddSeedKeyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL,
         AddSeedKeyboardProc, module, 0);
+    AddSeedMouseHook = SetWindowsHookExW(WH_MOUSE_LL,
+        AddSeedMouseProc, module, 0);
+    AddSeedMouseFailed.store(AddSeedMouseHook == nullptr,
+        std::memory_order_release);
     if (AddSeedEdit == nullptr || AddSeedKeyboardHook == nullptr) {
         AddSeedKeyboardFailed.store(true, std::memory_order_release);
     }
@@ -1266,6 +1702,10 @@ DWORD WINAPI AddSeedKeyboardMain(void*) {
         (void)UnhookWindowsHookEx(AddSeedKeyboardHook);
         AddSeedKeyboardHook = nullptr;
     }
+    if (AddSeedMouseHook != nullptr) {
+        (void)UnhookWindowsHookEx(AddSeedMouseHook);
+        AddSeedMouseHook = nullptr;
+    }
     if (AddSeedEdit != nullptr) {
         DestroyWindow(AddSeedEdit);
         AddSeedEdit = nullptr;
@@ -1280,6 +1720,7 @@ auto StartAddSeedKeyboard() noexcept -> bool {
     }
     AddSeedKeyboardReady.store(false, std::memory_order_release);
     AddSeedKeyboardFailed.store(false, std::memory_order_release);
+    AddSeedMouseFailed.store(false, std::memory_order_release);
     AddSeedForwardedKeys.fill(false);
     AddSeedConsumedKeys.fill(false);
     AddSeedKeyboardThread = CreateThread(nullptr, 0, AddSeedKeyboardMain,
@@ -1289,6 +1730,11 @@ auto StartAddSeedKeyboard() noexcept -> bool {
             && !AddSeedKeyboardReady.load(std::memory_order_acquire);
             ++attempt) {
         Sleep(10);
+    }
+    if (AddSeedMouseFailed.load(std::memory_order_acquire)) {
+        if (Context != nullptr) {
+            Context->LogWarn("MapSeedSelector: right-click seed deletion is unavailable because the mouse input hook could not be started.");
+        }
     }
     return AddSeedKeyboardReady.load(std::memory_order_acquire)
         && !AddSeedKeyboardFailed.load(std::memory_order_acquire);
@@ -1308,6 +1754,7 @@ void StopAddSeedKeyboard() noexcept {
     }
     AddSeedKeyboardReady.store(false, std::memory_order_release);
     AddSeedKeyboardFailed.store(false, std::memory_order_release);
+    AddSeedMouseFailed.store(false, std::memory_order_release);
 }
 
 auto RegisterDialogLayout(const D2RL::PluginContext* context,
@@ -1535,6 +1982,42 @@ void __cdecl AddSeedActionOnUi(const D2RL::PluginContext* context,
         }
     } else if (action == 7) {
         CloseCurrentSeedPanel(context);
+    } else if (action == 8) {
+        std::size_t seedIndex{};
+        if (DropdownExpanded.load(std::memory_order_acquire)
+                && DropdownEntryAtScreenPoint(
+                    PendingDeletePointX.load(std::memory_order_relaxed),
+                    PendingDeletePointY.load(std::memory_order_relaxed),
+                    seedIndex)
+                && seedIndex != static_cast<std::size_t>(-1)) {
+            OpenDeleteSeedDialog(context, seedIndex);
+        }
+    } else if (action == 9) {
+        const auto seedIndex = PendingDeleteSeedIndex.load(
+            std::memory_order_acquire);
+        std::string message;
+        if (seedIndex != static_cast<std::size_t>(-1)
+                && MapSeedSelector::DeleteSeedEntry(seedIndex, message)) {
+            CloseDeleteSeedDialog(context);
+            PendingDeleteSeedIndex.store(static_cast<std::size_t>(-1),
+                std::memory_order_release);
+            if (!RefreshSelectorLayouts(context)) {
+                context->LogWarn("MapSeedSelector: seed was deleted from TOML, but the dropdown could not refresh. Restart D2RLoader to update the visible list.");
+            } else {
+                CacheSeedDropdownScreenRect(context);
+                D2RL::LogInfo(context,
+                    "MapSeedSelector: deleted seed and refreshed the dropdown immediately.");
+            }
+        } else {
+            if (!message.empty()) context->LogWarn(message.c_str());
+            else context->LogWarn("MapSeedSelector: no saved seed is pending deletion.");
+        }
+    } else if (action == 10) {
+        CloseDeleteSeedDialog(context);
+        PendingDeleteSeedIndex.store(static_cast<std::size_t>(-1),
+            std::memory_order_release);
+    } else if (action == 11) {
+        CacheSeedDropdownScreenRect(context);
     } else if (action == 2) {
         std::wstring wideName;
         std::wstring wideSeed;
@@ -1555,6 +2038,7 @@ void __cdecl AddSeedActionOnUi(const D2RL::PluginContext* context,
                 message = "Seed added and selected.";
                 D2RL::LogInfo(context,
                     "MapSeedSelector: added a seed and refreshed the dropdown immediately.");
+                CacheSeedDropdownScreenRect(context);
             }
             {
                 std::lock_guard lock(AddSeedInputMutex);
@@ -1642,7 +2126,14 @@ void __cdecl ApplyPanelState(const D2RL::PluginContext* context,
         }
     };
     syncAuxiliaryPanel(AddSeedButtonPanelHandle);
-    if (!shouldOpen) CloseCurrentSeedPanel(context);
+    if (!shouldOpen) {
+        CloseCurrentSeedPanel(context);
+        CloseDeleteSeedDialog(context);
+        PendingDeleteSeedIndex.store(static_cast<std::size_t>(-1),
+            std::memory_order_release);
+        DropdownExpanded.store(false, std::memory_order_release);
+        DropdownScreenRectValid.store(false, std::memory_order_release);
+    }
     if (OptionsPanelHandle != D2RL::Panels::InvalidHandle) {
         D2RL::Panels::PanelInfo optionsInfo{
             .structSize = D2RL::Panels::PanelInfoSize,
@@ -1665,6 +2156,7 @@ void __cdecl ApplyPanelState(const D2RL::PluginContext* context,
 
     TrimClosedSelectorPanels(context);
     if (shouldOpen) {
+        CacheSeedDropdownScreenRect(context);
         MapSeedSelector::RefreshUi();
         ScheduleUiRefresh();
     }
@@ -1727,6 +2219,10 @@ auto __cdecl OnUiMessage(const D2RL::PluginContext* context,
         ? std::string_view(event->text) : std::string_view{};
 
     if (target == "PanelManager" && command == "ClosePanel") {
+        if (message == QualifiedDeleteSeedDialogName) {
+            DeleteSeedDialogOpen.store(false, std::memory_order_release);
+            return D2RL::SharedEvents::UiMessageAction::Continue;
+        }
         if (message == QualifiedCurrentSeedPanelName) {
             const bool wasOpen = CurrentSeedPanelOpen.exchange(false,
                 std::memory_order_acq_rel);
@@ -1759,6 +2255,14 @@ auto __cdecl OnUiMessage(const D2RL::PluginContext* context,
         }
         if (message == CloseCurrentSeedMessage) {
             ScheduleAddSeedAction(7);
+            return D2RL::SharedEvents::UiMessageAction::Consume;
+        }
+        if (message == ConfirmDeleteSeedMessage) {
+            ScheduleAddSeedAction(9);
+            return D2RL::SharedEvents::UiMessageAction::Consume;
+        }
+        if (message == CancelDeleteSeedMessage) {
+            ScheduleAddSeedAction(10);
             return D2RL::SharedEvents::UiMessageAction::Consume;
         }
         if (message == FocusSeedNameMessage) {
@@ -1856,9 +2360,6 @@ void __cdecl OnGameplayEvent(const D2RL::PluginContext* context,
     }
     if (event->kind == D2RL::Lifecycle::GameplayEventKind::GameJoined
             || event->kind == D2RL::Lifecycle::GameplayEventKind::GameLeft) {
-        if (event->kind == D2RL::Lifecycle::GameplayEventKind::GameJoined) {
-            MapSeedSelector::LogSeedInitializationSummary();
-        }
         DesiredPanelOpen.store(false, std::memory_order_release);
         AddSeedDialogOpen.store(false, std::memory_order_release);
         AddSeedTypingEnabled.store(false, std::memory_order_release);
@@ -1944,7 +2445,9 @@ auto QueryServices(const D2RL::PluginContext* context) noexcept -> bool {
 
 void UnregisterUi() noexcept {
     CloseCurrentSeedPanel(Context);
+    CloseDeleteSeedDialog(Context);
     (void)UnloadCurrentSeedPanelLayout(Context);
+    (void)UnloadDeleteSeedDialogLayout(Context);
     if (ActiveAddSeedDialogSlot < AddSeedDialogSlotCount) {
         CloseAddSeedDialog(Context);
     }
@@ -1954,6 +2457,11 @@ void UnregisterUi() noexcept {
     AddSeedDialogOpen.store(false, std::memory_order_release);
     AddSeedTypingEnabled.store(false, std::memory_order_release);
     CurrentSeedPanelOpen.store(false, std::memory_order_release);
+    DeleteSeedDialogOpen.store(false, std::memory_order_release);
+    PendingDeleteSeedIndex.store(static_cast<std::size_t>(-1),
+        std::memory_order_release);
+    DropdownExpanded.store(false, std::memory_order_release);
+    DropdownScreenRectValid.store(false, std::memory_order_release);
     AddSeedTextRefreshPending.store(false, std::memory_order_release);
     AddSeedTextChanged.store(false, std::memory_order_release);
     PanelSyncPending.store(false, std::memory_order_release);
@@ -2008,6 +2516,12 @@ void UnregisterUi() noexcept {
         (void)PanelService->unregisterPanel(Context, CurrentSeedPanelHandle);
     }
     if (Context != nullptr && PanelService != nullptr
+            && DeleteSeedDialogPanelHandle
+                != D2RL::Panels::InvalidHandle) {
+        (void)PanelService->unregisterPanel(Context,
+            DeleteSeedDialogPanelHandle);
+    }
+    if (Context != nullptr && PanelService != nullptr
             && AddSeedButtonPanelHandle != D2RL::Panels::InvalidHandle) {
         (void)PanelService->unregisterPanel(Context,
             AddSeedButtonPanelHandle);
@@ -2039,6 +2553,12 @@ void UnregisterUi() noexcept {
                 != D2RL::Resources::InvalidHandle) {
         (void)ResourceService->unregisterResource(Context,
             CurrentSeedPanelLayoutHandle);
+    }
+    if (Context != nullptr && ResourceService != nullptr
+            && DeleteSeedDialogLayoutHandle
+                != D2RL::Resources::InvalidHandle) {
+        (void)ResourceService->unregisterResource(Context,
+            DeleteSeedDialogLayoutHandle);
     }
     if (Context != nullptr && ResourceService != nullptr
             && AddSeedButtonLayoutHandle != D2RL::Resources::InvalidHandle) {
@@ -2136,7 +2656,11 @@ void UnregisterUi() noexcept {
     SetActivePanelSlot(0);
     AddSeedButtonPanelHandle = D2RL::Panels::InvalidHandle;
     CurrentSeedPanelHandle = D2RL::Panels::InvalidHandle;
+    DeleteSeedDialogPanelHandle = D2RL::Panels::InvalidHandle;
     CurrentSeedPanelLayoutLoaded.store(false, std::memory_order_release);
+    DeleteSeedDialogLayoutHandle = D2RL::Resources::InvalidHandle;
+    DeleteSeedDialogLayoutLoaded.store(false, std::memory_order_release);
+    DeleteSeedDialogLayoutJson.clear();
     for (auto& slot : AddSeedDialogSlots) {
         slot.layout = D2RL::Resources::InvalidHandle;
         slot.panel = D2RL::Panels::InvalidHandle;
@@ -2672,6 +3196,40 @@ auto RegisterUi(const D2RL::PluginContext* context) noexcept -> bool {
         return false;
     }
 
+    DeleteSeedDialogLayoutJson = BuildDeleteSeedDialogLayout("");
+    const D2RL::Resources::ResourceRegistration deleteSeedLayout{
+        .structSize = D2RL::Resources::ResourceRegistrationSize,
+        .flags = 0,
+        .path = DeleteSeedDialogLayoutResourcePath,
+        .bytes = DeleteSeedDialogLayoutJson.data(),
+        .byteCount = DeleteSeedDialogLayoutJson.size(),
+    };
+    const auto deleteSeedLayoutResult = ResourceService->registerResource(
+        context, &deleteSeedLayout, &DeleteSeedDialogLayoutHandle);
+    if (deleteSeedLayoutResult != D2RL::Resources::Result::Success
+            || DeleteSeedDialogLayoutHandle
+                == D2RL::Resources::InvalidHandle) {
+        D2RL::LogWarnF(context,
+            "MapSeedSelector: delete confirmation layout registration failed (result=%u).",
+            static_cast<unsigned>(deleteSeedLayoutResult));
+        return false;
+    }
+    const D2RL::Panels::PanelRegistration deleteSeedPanel{
+        .structSize = D2RL::Panels::PanelRegistrationSize,
+        .flags = D2RL::Panels::PanelFlags::CloseOnEscape,
+        .localId = DeleteSeedDialogLocalId,
+    };
+    const auto deleteSeedPanelResult = PanelService->registerPanel(context,
+        &deleteSeedPanel, &DeleteSeedDialogPanelHandle);
+    if (deleteSeedPanelResult != D2RL::Panels::Result::Success
+            || DeleteSeedDialogPanelHandle
+                == D2RL::Panels::InvalidHandle) {
+        D2RL::LogWarnF(context,
+            "MapSeedSelector: delete confirmation panel registration failed (result=%u).",
+            static_cast<unsigned>(deleteSeedPanelResult));
+        return false;
+    }
+
     for (std::size_t slotIndex = 0;
             slotIndex < AddSeedDialogSlotCount; ++slotIndex) {
         auto& slot = AddSeedDialogSlots[slotIndex];
@@ -2733,6 +3291,13 @@ auto RegisterUi(const D2RL::PluginContext* context) noexcept -> bool {
             CurrentSeedPanelHandle = D2RL::Panels::InvalidHandle;
         }
         if (PanelService != nullptr
+                && DeleteSeedDialogPanelHandle
+                    != D2RL::Panels::InvalidHandle) {
+            (void)PanelService->unregisterPanel(context,
+                DeleteSeedDialogPanelHandle);
+            DeleteSeedDialogPanelHandle = D2RL::Panels::InvalidHandle;
+        }
+        if (PanelService != nullptr
                 && AddSeedButtonPanelHandle
                     != D2RL::Panels::InvalidHandle) {
             (void)PanelService->unregisterPanel(context,
@@ -2762,6 +3327,14 @@ auto RegisterUi(const D2RL::PluginContext* context) noexcept -> bool {
                 CurrentSeedPanelLayoutHandle);
         }
         CurrentSeedPanelLayoutHandle = D2RL::Resources::InvalidHandle;
+        if (ResourceService != nullptr
+                && DeleteSeedDialogLayoutHandle
+                    != D2RL::Resources::InvalidHandle) {
+            (void)ResourceService->unregisterResource(context,
+                DeleteSeedDialogLayoutHandle);
+        }
+        DeleteSeedDialogLayoutHandle = D2RL::Resources::InvalidHandle;
+        DeleteSeedDialogLayoutJson.clear();
         if (ResourceService != nullptr
                 && AddSeedButtonLowEndSpriteHandle
                     != D2RL::Resources::InvalidHandle) {
